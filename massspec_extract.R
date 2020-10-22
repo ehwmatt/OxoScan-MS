@@ -19,24 +19,33 @@ Files$key=key
 patient.df=merge(patient.df,Files,by.x ="File.Name",by.y="key") ## merge file names with patient info
 #
 IDs=unique(patient.df$anonym_id)
-#i=IDs[1]
-Df.138<-data.frame('pID'=IDs,'X138max'=rep(0,length(IDs)))
+#
+Df.138<-vector('list',length(IDs))
 for (i in IDs){
   df.sub=patient.df[patient.df$anonym_id==i,]
   MASS_SPEC=vector('list', nrow(df.sub)) ## collate data from all 3 replicates for each patient 
   names(MASS_SPEC)<-df.sub$Files
-  IONS=vector('list', nrow(df.sub))
-  names(IONS)<-df.sub$Files
+  n<-1
   for (j in df.sub$Files){
     df<-read.csv(paste(folder,'Data/',j,sep=''),sep='')
     df$Window.mid<-rowMeans(df[,c("Window.Low","Window.High")]) # take mid between low and high window
     Ions<-"X138.055" #colnames(df)[5:length(colnames(df))-1]
-    MASS_SPEC[[j]]<-df[,c('RT',"Window.mid",Ions)]
-    tmp<-sum(df[,c(Ions)])
-    IONS[[j]]<-tmp
+    df.keep<-df[,c('RT',"Window.mid",Ions)]
+    newcol<-paste('RTint138',n,sep='')
+    df.new=data.frame('MZ'=unique(df.keep$Window.mid))
+    for( mz in unique(df.keep$Window.mid)){
+      dfs<-df.keep[df.keep$Window.mid==mz,]
+      tmp<-integrate.xy(dfs$RT, dfs$X138.055)#
+      df.new[df.new$MZ==mz,newcol]<-tmp
+    }
+    MASS_SPEC[[j]]<-df.new
+    n<-n+1
   }
-  IONS<-mean(unlist(IONS))
-  Df.138[Df.138$pID==i,'X138max']=IONS
+  IONS<-merge(MASS_SPEC[[1]],MASS_SPEC[[2]],by='MZ',all=TRUE)
+  IONS<-merge(IONS,MASS_SPEC[[3]],by='MZ',all=TRUE)
+  IONS$RTint1381[is.na(IONS$RTint1381)]<-IONS$RTint1382[is.na(IONS$RTint1381)]
+  IONS$RTint1381[is.na(IONS$RTint1381)]<-IONS$RTint1383[is.na(IONS$RTint1381)]
+  Df.138[[i]]=IONS[,c('MZ',"RTint1381")]
 }
 Df.138=merge(Df.138,patient.df[,c('anonym_id','I.WHO')],by.x='pID',by.y='anonym_id',all.x=TRUE)
 Df.138=unique(Df.138)
