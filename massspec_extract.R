@@ -45,10 +45,14 @@ for (i in IDs){
   IONS<-merge(IONS,MASS_SPEC[[3]],by='MZ',all=TRUE)
   IONS$RTint1381[is.na(IONS$RTint1381)]<-IONS$RTint1382[is.na(IONS$RTint1381)]
   IONS$RTint1381[is.na(IONS$RTint1381)]<-IONS$RTint1383[is.na(IONS$RTint1381)]
-  Df.138[[i]]=IONS[,c('MZ',"RTint1381")]
+  IONS$pID<-i
+  Df.138[[i]]=IONS[,c('MZ',"RTint1381","pID")]
 }
-Df.138=merge(Df.138,patient.df[,c('anonym_id','I.WHO')],by.x='pID',by.y='anonym_id',all.x=TRUE)
-Df.138=unique(Df.138)
+#
+Df.138.all<-do.call(rbind, Df.138)
+#
+Df.138.all=merge(Df.138.all,patient.df[,c('anonym_id','I.WHO',"F.Severity")],by.x='pID',by.y='anonym_id',all.x=TRUE)
+Df.138.all=unique(Df.138.all)
 ###
-write.csv(Df.138,'/camp/stp/babs/working/schneid/Data_Challenge_2020/2020-Project3/Extracted_138.csv')
+write.csv(Df.138.all,'/camp/stp/babs/working/schneid/Data_Challenge_2020/2020-Project3/Extracted_138.csv')
 #
