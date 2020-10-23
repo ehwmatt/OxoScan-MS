@@ -32,7 +32,7 @@ for (i in IDs){
 dfpeaks$F.Severity<-factor(dfpeaks$F.Severity,c("healthy","mild","severe","critical"))
 # example plot
 ggplot(df2, aes(x=MZ,y=RTint1381))+geom_line()+geom_point(data=df3,color='red')+
-  labs(x='M/Z',y='RT integrated intensity for 138')
+  labs(x='M/Z',y='RT integrated intensity for 138',title=paste('Patient ',i,', ', df2$F.Severity[1],' state',sep=''))
   
 #############################
 ###
