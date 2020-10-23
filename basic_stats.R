@@ -6,6 +6,7 @@ library(psych)
 library(MASS)
 library(quantmod)
 library(class)
+library(caret)
 
 setwd('/camp/stp/babs/working/schneid/Data_Challenge_2020/2020-Project3')
 Df.138=read.csv('Extracted_138.csv')
@@ -39,7 +40,7 @@ ggplot(df2, aes(x=MZ,y=RTint1381))+geom_line()+geom_point(data=df3,color='red')+
 ###
 #############################
 ###
-train.N<-sample(1:nrow(dfpeaks),size=nrow(dfpeaks)*0.7,replace = FALSE) #random selection of 70% data
+train.N<-sample(1:nrow(dfpeaks),size=nrow(dfpeaks)*0.65,replace = FALSE) #random selection of 70% data
 
 train<-dfpeaks[train.N,c('pID','MZ','X138max')]
 test<-dfpeaks[-train.N,c('pID','MZ','X138max')] # MASS Spec data 
@@ -50,18 +51,33 @@ Labels.test<-dfpeaks[-train.N,'F.Severity'] # Disease severity, can be F.Severit
 K<-sqrt(nrow(train)) # optimal starting point for cluster #
 K<-seq(3,ceiling(K),1)
 
-KNN.fits<-rep(0,length(K))
 KNN.mod<-vector('list',length(K))
 i=1
 for (k in K){
   tmp<-knn(train=train, test=test, cl=Labels.train, k=k)
   KNN.mod[[i]]<-tmp
-  KNN.fits[i]<-100 * sum(Labels.test == tmp)/NROW(Labels.test) # accuracy rate
   i=i+1
 }
-plot(K,KNN.fits)
-k.opt<-K[which(max(KNN.fits)==KNN.fits)[1]]
-KNN.mod.opt<-KNN.mod[[which(max(KNN.fits)==KNN.fits)[1]]]
+##
+##### CV
+trControl <- trainControl(method  = "cv",
+                          number  = 200)
+fit <- train(F.Severity ~ MZ+X138max+pID,
+             method     = "knn",
+             tuneGrid   = expand.grid(k = K),
+             trControl  = trControl,
+             metric     = "Accuracy",
+             data       = dfpeaks)
+fit
+#
+opt<-which(fit$results$Accuracy==max(fit$results$Accuracy))
+ggplot(fit$results,aes(x=k,y=Kappa))+
+  geom_line()+
+  geom_vline(xintercept=fit$results$k[opt],color='red')
+
+#
+k.opt<-fit$results[opt,'k']
+KNN.mod.opt<-KNN.mod[[opt]]
 table(KNN.mod.opt,Labels.test)
 Main.res<- confusionMatrix(table(KNN.mod.opt,Labels.test))
 Main.res
