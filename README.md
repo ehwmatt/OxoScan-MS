@@ -1,9 +1,19 @@
-# 2020-Project3
+# Glycoproteomics
 
-## Identifying glycosylated proteins in blood plasma to predict COVID-19 severity
+A repository containing code used for analysis of glycoproteomics spectra.
 
-:speech_balloon:  [**Slack Channel**](https://app.slack.com/client/T01B34Z0DNK/C01C5CFMT7Y)
+## Installing
 
-:dvd:  **CAMP Data location:** /camp/project/proj-data-challenge/project3
+Install Python requirements with:
 
-[**Matt and Christoph's pitch**](https://www.dropbox.com/sh/6vlmzayvt86gnh0/AAAVaS38i1oM6-SVbPazCK_Wa?dl=0&preview=DataChallengePitch_Project3-Matt-Christoph.mp4)
+```
+pip install -r requirements.txt
+```
+
+## Running tests
+
+Run the test suite with:
+
+```
+pytest --cov=glycoproteomics
+```
