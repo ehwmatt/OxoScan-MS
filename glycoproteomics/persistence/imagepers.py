@@ -16,7 +16,7 @@ def iter_neighbors(p, w, h):
     y, x = p
 
     # 8-neighborship
-    neigh = [(y+j, x+i) for i in [-1, 0, 1] for j in [-1, 0, 1]]
+    neigh = [(y + j, x + i) for i in [-1, 0, 1] for j in [-1, 0, 1]]
     # 4-neighborship
     # neigh = [(y-1, x), (y+1, x), (y, x-1), (y, x+1)]
 
@@ -63,8 +63,8 @@ def persistence(im):
             # Merge all others with oldp
             for bl, q in nc[1:]:
                 if uf[q] not in groups0:
-                    #print(i, ": Merge", uf[q], "with", oldp, "via", p)
-                    groups0[uf[q]] = (bl, bl-v, p)
+                    # print(i, ": Merge", uf[q], "with", oldp, "via", p)
+                    groups0[uf[q]] = (bl, bl - v, p)
                 uf.union(oldp, q)
 
     groups0 = [(k, groups0[k][0], groups0[k][1], groups0[k][2]) for k in groups0]

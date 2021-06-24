@@ -42,7 +42,7 @@ class UnionFind:
 
         # check for previously unknown object
         if object not in self.parents:
-            assert(False)
+            assert False
             self.parents[object] = object
             self.weights[object] = 1
             return object
@@ -60,9 +60,7 @@ class UnionFind:
         return root
 
     def __iter__(self):
-        """Iterate through all items ever found or unioned by this structure.
-
-        """
+        """Iterate through all items ever found or unioned by this structure."""
         return iter(self.parents)
 
     def union(self, *objects):
