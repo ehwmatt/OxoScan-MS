@@ -17,3 +17,7 @@ Run the test suite with:
 ```
 pytest --cov=glycoproteomics
 ```
+
+## Acknowledgements
+
+Persistence code is cloned from a [repository](https://git.sthu.org/?p=persistence.git) by [Stefan Huber](https://www.sthu.org/code/codesnippets/imagepers.html).
