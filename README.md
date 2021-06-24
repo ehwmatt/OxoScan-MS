@@ -10,7 +10,7 @@ Install Python requirements with:
 pip install -r requirements.txt
 ```
 
-## Running tests
+## Running tests
 
 Run the test suite with:
 
