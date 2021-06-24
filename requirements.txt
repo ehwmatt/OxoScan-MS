@@ -2,3 +2,4 @@ pytest
 black
 pytest-cov
 numpy
+matplotlib
