@@ -5,7 +5,7 @@
 __author__ = "Stefan Huber <shuber@sthu.org>"
 
 
-import union_find
+from . import union_find
 
 
 def get(im, p):
