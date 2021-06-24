@@ -1,5 +1,5 @@
 import numpy as np
-import glycoproteomics.persistence.imagepers
+import glycoproteomics
 
 
 def test_single_peak():
