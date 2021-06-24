@@ -26,6 +26,11 @@ def test_read_spectrum_file(tmp_path):
     }
 
 
+def test_read_gzipped_spectrum_file(rootdir):
+    test_spectrum = os.path.join(rootdir, "tests", "data", "spectrum.txt.gz")
+    assert isinstance(glycoproteomics.io.read_spectrum_file(test_spectrum), dict)
+
+
 def test_read_spectra_directory(tmp_path):
     for idx in range(3):
         test_spectrum = os.path.join(tmp_path, "spectrum{}.txt".format(idx + 1))
