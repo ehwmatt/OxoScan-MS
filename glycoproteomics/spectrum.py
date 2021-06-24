@@ -1,3 +1,6 @@
+import numpy as np
+
+
 def bin(single_spectra_dict, rt_window, mz_window, combine_function):
     return_dict = {}
 
@@ -35,3 +38,23 @@ def combine(multiple_spectra_dict, combine_function):
                 mz_dict[ion] = combine_function(mz_dict[ion])
 
     return return_dict
+
+
+def to_matrix(dict_data, ion):
+    x_data = set([])
+    y_data = set([])
+    for rt, rt_dict in dict_data.items():
+        x_data.add(rt)
+        for mz in rt_dict:
+            y_data.add(mz)
+
+    sorted_x_data = sorted(list(x_data))
+    sorted_y_data = sorted(list(y_data))
+    return_matrix = np.zeros((len(sorted_x_data), len(sorted_y_data)))
+    for rt, rt_dict in dict_data.items():
+        for mz in rt_dict:
+            return_matrix[sorted_x_data.index(rt), sorted_y_data.index(mz)] = rt_dict[
+                mz
+            ][ion]
+
+    return return_matrix, sorted_x_data, sorted_y_data
