@@ -28,3 +28,28 @@ def test_peaks_find():
     assert glycoproteomics.peaks.find(ion_matrix, x_labels, y_labels, 1, 0.02, 2.0) == [
         ((0.08, 808.0), 4, 4)
     ]
+
+
+def test_peaks_integrate():
+    ion_matrix = np.array(
+        [
+            [1, 1, 1, 1, 1],
+            [1, 2, 2, 2, 1],
+            [1, 2, 3, 2, 1],
+            [1, 2, 2, 2, 4],
+        ]
+    )
+    x_labels = [0.2, 0.4, 0.6, 0.8]
+    y_labels = [800.0, 802.0, 804.0, 806.0, 808.0]
+    peaks = [((0.8, 808.0), 4, 4), ((0.6, 804.0), 3, 1)]
+    assert glycoproteomics.peaks.integrate(
+        ion_matrix, x_labels, y_labels, peaks, 0.3, 3.0, np.max
+    ) == [4.0, 3.0]
+    # Test different integration function
+    assert glycoproteomics.peaks.integrate(
+        ion_matrix, x_labels, y_labels, peaks, 0.3, 3.0, np.sum
+    ) == [9.0, 19.0]
+    # Test different radii
+    assert glycoproteomics.peaks.integrate(
+        ion_matrix, x_labels, y_labels, peaks, 0.3, 5.0, np.sum
+    ) == [11.0, 21.0]
