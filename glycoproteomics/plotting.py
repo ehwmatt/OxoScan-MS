@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.patches import Ellipse
 
 
 def plot_ion_matrix(ion_matrix, x_label, y_label, title, figsize, dpi):
@@ -15,4 +16,21 @@ def plot_ion_matrix(ion_matrix, x_label, y_label, title, figsize, dpi):
     ax.set_xlabel("RT")
     ax.set_ylabel("MZ")
     fig.colorbar(c, ax=ax)
-    plt.plot()
+    return fig, ax
+
+
+def plot_ion_matrix_with_peaks(
+    ion_matrix, x_label, y_label, peaks, x_radius, y_radius, title, figsize, dpi
+):
+    fig, ax = plot_ion_matrix(ion_matrix, x_label, y_label, title, figsize, dpi)
+    for peak in peaks:
+        ax.add_patch(
+            Ellipse(
+                peak[0],
+                x_radius * 2.0,
+                y_radius * 2.0,
+                facecolor="none",
+                edgecolor="red",
+            )
+        )
+    return fig, ax
