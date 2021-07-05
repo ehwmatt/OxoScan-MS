@@ -23,14 +23,23 @@ def plot_ion_matrix_with_peaks(
     ion_matrix, x_label, y_label, peaks, x_radius, y_radius, title, figsize, dpi
 ):
     fig, ax = plot_ion_matrix(ion_matrix, x_label, y_label, title, figsize, dpi)
-    for peak in peaks:
+    for idx in range(len(peaks)):
         ax.add_patch(
             Ellipse(
-                peak[0],
+                peaks[idx][0],
                 x_radius * 2.0,
                 y_radius * 2.0,
                 facecolor="none",
                 edgecolor="red",
             )
+        )
+        ax.text(
+            peaks[idx][0][0] - x_radius,
+            peaks[idx][0][1],
+            str(idx+1),
+            horizontalalignment='right',
+            verticalalignment='center',
+            fontsize=6,
+            color='white'
         )
     return fig, ax
