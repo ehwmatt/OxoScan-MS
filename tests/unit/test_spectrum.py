@@ -214,9 +214,17 @@ def test_spectrum_to_matrix():
             }
         },
     }
-    result = glycoproteomics.spectrum.to_matrix(spectrum, "204.087")
+    result = glycoproteomics.spectrum.to_matrix(spectrum, ["204.087"])
     np.testing.assert_array_equal(
         result[0], np.array([[1.0, 0.0, 0.0], [0.0, 4.0, 0.0], [0.0, 0.0, 7.0]])
+    )
+    assert result[1] == [0.00350036, 0.00450542, 0.0049]
+    assert result[2] == [780.8955, 782.887, 783.887]
+    result = glycoproteomics.spectrum.to_matrix(
+        spectrum, ["204.087", "186.076", "168.066"]
+    )
+    np.testing.assert_array_equal(
+        result[0], np.array([[6.0, 0.0, 0.0], [0.0, 15.0, 0.0], [0.0, 0.0, 24.0]])
     )
     assert result[1] == [0.00350036, 0.00450542, 0.0049]
     assert result[2] == [780.8955, 782.887, 783.887]

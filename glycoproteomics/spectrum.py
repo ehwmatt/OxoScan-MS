@@ -41,7 +41,7 @@ def combine(multiple_spectra_dict, combine_function):
     return return_dict
 
 
-def to_matrix(single_spectra_dict, ion):
+def to_matrix(single_spectra_dict, ion_list):
     x_data = set([])
     y_data = set([])
     for rt, rt_dict in single_spectra_dict.items():
@@ -54,9 +54,9 @@ def to_matrix(single_spectra_dict, ion):
     return_matrix = np.zeros((len(sorted_x_data), len(sorted_y_data)))
     for rt, rt_dict in single_spectra_dict.items():
         for mz in rt_dict:
-            return_matrix[sorted_x_data.index(rt), sorted_y_data.index(mz)] = rt_dict[
-                mz
-            ][ion]
+            return_matrix[sorted_x_data.index(rt), sorted_y_data.index(mz)] = np.sum(
+                [rt_dict[mz][ion] for ion in ion_list]
+            )
 
     return return_matrix, sorted_x_data, sorted_y_data
 
@@ -93,8 +93,8 @@ def align_rt(single_spectra_dict, single_spectra_ref_dict, warp_factor):
     2) RT Mapping from reference RT values to sample RT values
     """
     ions = list_ions(single_spectra_dict)
-    spectra_dict = {ion: to_matrix(single_spectra_dict, ion) for ion in ions}
-    ref_dict = {ion: to_matrix(single_spectra_ref_dict, ion) for ion in ions}
+    spectra_dict = {ion: to_matrix(single_spectra_dict, [ion]) for ion in ions}
+    ref_dict = {ion: to_matrix(single_spectra_ref_dict, [ion]) for ion in ions}
 
     _discard, x_data, y_data = list(spectra_dict.values())[0]
     _discard, x_ref, y_ref = list(ref_dict.values())[0]
