@@ -53,3 +53,12 @@ def test_peaks_integrate():
     assert glycoproteomics.peaks.integrate(
         ion_matrix, x_labels, y_labels, peaks, 0.3, 5.0, np.sum
     ) == [11.0, 21.0]
+
+
+def test_peaks_rt_move():
+    peaks = [((0.8, 808.0), 4, 4), ((0.6, 804.0), 3, 1)]
+    rt_alignment = {0.8: 0.7, 0.6: 0.5}
+    assert glycoproteomics.peaks.rt_move(peaks, rt_alignment) == [
+        ((0.7, 808.0), 4, 4),
+        ((0.5, 804.0), 3, 1),
+    ]

@@ -37,3 +37,10 @@ def integrate(
                     peak_array.append(ion_matrix[i][j])
         return_list.append(integration_function(peak_array))
     return return_list
+
+
+def rt_move(peaks, rt_alignment_dict):
+    return [
+        ((rt_alignment_dict[peak[0][0]], peak[0][1]), peak[1], peak[2])
+        for peak in peaks
+    ]

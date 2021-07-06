@@ -36,10 +36,10 @@ def plot_ion_matrix_with_peaks(
         ax.text(
             peaks[idx][0][0] - x_radius,
             peaks[idx][0][1],
-            str(idx+1),
-            horizontalalignment='right',
-            verticalalignment='center',
+            str(idx + 1),
+            horizontalalignment="right",
+            verticalalignment="center",
             fontsize=6,
-            color='white'
+            color="white",
         )
     return fig, ax

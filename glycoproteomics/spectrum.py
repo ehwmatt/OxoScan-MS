@@ -1,4 +1,5 @@
 import numpy as np
+from fastdtw import fastdtw
 
 
 def bin(single_spectra_dict, rt_window, mz_window, combine_function):
@@ -64,3 +65,69 @@ def list_ions(single_spectra_dict):
     for rt, rt_dict in single_spectra_dict.items():
         for mz, mz_dict in rt_dict.items():
             return sorted(list(set(mz_dict.keys())))
+
+
+def get_rt_array(matrix_spectra_dict, ions, x_data, y_data, common_y):
+    return [
+        np.array(
+            [
+                matrix_spectra_dict[ion][0][idx, [y_data.index(y) for y in common_y]]
+                for ion in ions
+            ]
+        )
+        for idx in range(len(x_data))
+    ]
+
+
+def align_rt(single_spectra_dict, single_spectra_ref_dict, warp_factor):
+    """Puts the first spectra on the same RT axis as the reference spectra using
+    Dynamic Time Warping. It is recommended to use this on binned data, as the
+    MZ values have to be the same for the comparisons to be made. This can
+    result in data columns (corresponding to a particular RT value) being
+    duplicated (if a sample column is matched to multiple reference columns) or
+    removed (if a reference column is mapped to multiple sample columns then
+    only the one with the minimal distance is used).
+
+    Outputs:
+    1) Aligned spectra
+    2) RT Mapping from reference RT values to sample RT values
+    """
+    ions = list_ions(single_spectra_dict)
+    spectra_dict = {ion: to_matrix(single_spectra_dict, ion) for ion in ions}
+    ref_dict = {ion: to_matrix(single_spectra_ref_dict, ion) for ion in ions}
+
+    _discard, x_data, y_data = list(spectra_dict.values())[0]
+    _discard, x_ref, y_ref = list(ref_dict.values())[0]
+
+    common_y = list(set(y_data).intersection(set(y_ref)))
+    spectra_array = get_rt_array(spectra_dict, ions, x_data, y_data, common_y)
+    ref_array = get_rt_array(ref_dict, ions, x_ref, y_ref, common_y)
+
+    dist_func = lambda a, b: np.sum(abs(a - b))
+
+    distance, path = fastdtw(spectra_array, ref_array, warp_factor, dist_func)
+
+    path_dict = {}
+    for link in path:
+        spec_idx, ref_idx = link
+        path_dict.setdefault(ref_idx, set([]))
+        path_dict[ref_idx].add(spec_idx)
+
+    optimal_links = {}
+    for ref_idx, spec_idxs in path_dict.items():
+        if len(spec_idxs) == 1:
+            optimal_links[ref_idx] = list(spec_idxs)[0]
+        else:
+            dists = [
+                dist_func(spectra_array[spec_idx], ref_array[ref_idx])
+                for spec_idx in spec_idxs
+            ]
+            optimal_links[ref_idx] = list(spec_idxs)[dists.index(min(dists))]
+
+    return_dict = {}
+    rt_mapping = {}
+    for ref_idx, spec_idx in optimal_links.items():
+        return_dict[x_ref[ref_idx]] = single_spectra_dict[x_data[spec_idx]]
+        rt_mapping[x_ref[ref_idx]] = x_data[spec_idx]
+
+    return return_dict, rt_mapping
