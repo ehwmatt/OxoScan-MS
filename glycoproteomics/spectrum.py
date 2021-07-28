@@ -79,7 +79,7 @@ def get_rt_array(matrix_spectra_dict, ions, x_data, y_data, common_y):
     ]
 
 
-def align_rt(single_spectra_dict, single_spectra_ref_dict, warp_factor):
+def align_rt(single_spectra_dict, single_spectra_ref_dict, warp_factor, normalise):
     """Puts the first spectra on the same RT axis as the reference spectra using
     Dynamic Time Warping. It is recommended to use this on binned data, as the
     MZ values have to be the same for the comparisons to be made. This can
@@ -105,7 +105,15 @@ def align_rt(single_spectra_dict, single_spectra_ref_dict, warp_factor):
 
     dist_func = lambda a, b: np.sum(abs(a - b))
 
-    distance, path = fastdtw(spectra_array, ref_array, warp_factor, dist_func)
+    if normalise:
+        distance, path = fastdtw(
+            (spectra_array - np.mean(spectra_array)) / np.std(spectra_array),
+            (ref_array - np.mean(ref_array)) / np.std(ref_array),
+            warp_factor,
+            dist_func,
+        )
+    else:
+        distance, path = fastdtw(spectra_array, ref_array, warp_factor, dist_func)
 
     path_dict = {}
     for link in path:

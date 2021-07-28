@@ -338,7 +338,7 @@ def test_align_rt():
             }
         },
     }
-    assert glycoproteomics.spectrum.align_rt(spectrum_1, spectrum_2, 2) == (
+    assert glycoproteomics.spectrum.align_rt(spectrum_1, spectrum_2, 2, False) == (
         {
             0.1: {
                 780.0: {
@@ -400,7 +400,7 @@ def test_align_rt():
             0.8: 0.8,
         },
     )
-    assert glycoproteomics.spectrum.align_rt(spectrum_2, spectrum_1, 2) == (
+    assert glycoproteomics.spectrum.align_rt(spectrum_2, spectrum_1, 2, False) == (
         {
             0.1: {
                 780.0: {
