@@ -139,3 +139,13 @@ def align_rt(single_spectra_dict, single_spectra_ref_dict, warp_factor, normalis
         rt_mapping[x_ref[ref_idx]] = x_data[spec_idx]
 
     return return_dict, rt_mapping
+
+
+def filter_rt(single_spectra_dict, min_threshold, max_threshold):
+    return_dict = {}
+    for rt, rt_dict in single_spectra_dict.items():
+        if (min_threshold == None or min_threshold <= rt) and (
+            max_threshold == None or rt <= max_threshold
+        ):
+            return_dict[rt] = rt_dict
+    return return_dict
