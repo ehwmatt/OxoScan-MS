@@ -44,3 +44,16 @@ def rt_move(peaks, rt_alignment_dict):
         ((rt_alignment_dict[peak[0][0]], peak[0][1]), peak[1], peak[2])
         for peak in peaks
     ]
+
+
+def assert_no_overlap(x_label, y_label, peaks, x_radius, y_radius):
+    all_bins = []
+    for peak in peaks:
+        peak_x, peak_y = peak[0]
+        for i, x in enumerate(x_label):
+            for j, y in enumerate(y_label):
+                if (x - peak_x) ** 2 / x_radius ** 2 + (
+                    y - peak_y
+                ) ** 2 / y_radius ** 2 <= 1.0:
+                    all_bins.append((i, j))
+    return len(all_bins) == len(list(set(all_bins)))
