@@ -20,4 +20,4 @@ pytest --cov=glycoproteomics
 
 ## Acknowledgements
 
-Persistence code is cloned from a [repository](https://git.sthu.org/?p=persistence.git) by [Stefan Huber](https://www.sthu.org/code/codesnippets/imagepers.html).
+Persistence code is cloned from a [repository](https://git.sthu.org/?p=persistence.git) by [Stefan Huber](https://www.sthu.org/code/codesnippets/imagepers.html). Licensed under version 3 of the GNU Lesser General Public License.
