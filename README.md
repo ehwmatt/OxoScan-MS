@@ -15,7 +15,16 @@ pip install -r requirements.txt
 Run the test suite with:
 
 ```
-pytest --cov=glycoproteomics
+pytest -k "not profiling" --cov=glycoproteomics
+```
+
+## Development
+
+To profile the code, and plot a graph of which functions take the most time, run:
+
+```
+pytest -k profiling
+python -m gprof2dot -f pstats prof/peak_integration.out | dot -Tpdf -o prof/peak_integration.pdf
 ```
 
 ## Acknowledgements

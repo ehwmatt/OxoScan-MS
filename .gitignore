@@ -2,3 +2,5 @@ __pycache__
 .pytest*
 .coverage*
 .venv*
+prof/
+.DS_Store
