@@ -40,20 +40,44 @@ def test_peaks_integrate():
             [1, 2, 2, 2, 4],
         ]
     )
-    x_labels = [0.2, 0.4, 0.6, 0.8]
-    y_labels = [800.0, 802.0, 804.0, 806.0, 808.0]
-    peaks = [((0.8, 808.0), 4, 4), ((0.6, 804.0), 3, 1)]
+    peak_indices = [
+        [[2, 2, 3, 3], [3, 4, 3, 4]],
+        [[1, 1, 1, 2, 2, 2, 3, 3, 3], [1, 2, 3, 1, 2, 3, 1, 2, 3]],
+    ]
     assert glycoproteomics.peaks.integrate(
-        ion_matrix, x_labels, y_labels, peaks, 0.3, 3.0, np.max
+        ion_matrix, peak_indices, np.max
     ) == [4.0, 3.0]
     # Test different integration function
     assert glycoproteomics.peaks.integrate(
-        ion_matrix, x_labels, y_labels, peaks, 0.3, 3.0, np.sum
+        ion_matrix, peak_indices, np.sum
     ) == [9.0, 19.0]
     # Test different radii
+    peak_indices = [
+        [[2, 2, 3, 3, 3], [3, 4, 2, 3, 4]],
+        [[1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3], [1, 2, 3, 0, 1, 2, 3, 4, 1, 2, 3]],
+    ]
     assert glycoproteomics.peaks.integrate(
-        ion_matrix, x_labels, y_labels, peaks, 0.3, 5.0, np.sum
+        ion_matrix, peak_indices, np.sum
     ) == [11.0, 21.0]
+
+
+def test_get_peak_indicies():
+    x_labels = [0.2, 0.4, 0.6, 0.8]
+    y_labels = [800.0, 802.0, 804.0, 806.0, 808.0]
+    peaks = [((0.8, 808.0), 4, 4), ((0.6, 804.0), 3, 1)]
+    assert glycoproteomics.peaks.convert_peaks_to_indicies(
+        x_labels, y_labels, peaks, 0.3, 3.0
+    ) == [
+        [[2, 2, 3, 3], [3, 4, 3, 4]],
+        [[1, 1, 1, 2, 2, 2, 3, 3, 3], [1, 2, 3, 1, 2, 3, 1, 2, 3]],
+    ]
+    # Test different radii
+    assert glycoproteomics.peaks.convert_peaks_to_indicies(
+        x_labels, y_labels, peaks, 0.3, 5.0
+    ) == [
+        [[2, 2, 3, 3, 3], [3, 4, 2, 3, 4]],
+        [[1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3], [1, 2, 3, 0, 1, 2, 3, 4, 1, 2, 3]],
+    ]
 
 
 def test_peaks_rt_move():

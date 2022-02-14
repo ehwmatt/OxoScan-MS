@@ -38,6 +38,9 @@ def test_peak_integration_profiling(rootdir, tmp_path):
             x_radius_exclude,
             y_radius_exclude
         )
+        peak_indicies = glycoproteomics.peaks.convert_peaks_to_indicies(
+            x_label, y_label, peaks, x_radius_quant, y_radius_quant
+        )
         with open(os.path.join(tmp_path, "peak_integration.tsv"), "w") as out_f:
             out_f.write("\t".join(
                 [
@@ -56,11 +59,7 @@ def test_peak_integration_profiling(rootdir, tmp_path):
                 )
                 peak_values = glycoproteomics.peaks.integrate(
                     ion_matrix,
-                    x_label,
-                    y_label,
-                    peaks,
-                    x_radius_quant,
-                    y_radius_quant,
+                    peak_indicies,
                     np.sum
                 )
                 for peak_idx in range(len(peak_values)):

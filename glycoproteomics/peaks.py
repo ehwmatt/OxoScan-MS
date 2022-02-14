@@ -23,20 +23,29 @@ def find(ion_matrix, x_label, y_label, N, x_radius, y_radius):
 
 
 def integrate(
-    ion_matrix, x_label, y_label, peaks, x_radius, y_radius, integration_function
+    ion_matrix, peak_indicies, integration_function
 ):
     return_list = []
+    for peak in peak_indicies:
+        return_list.append(integration_function(ion_matrix[tuple(peak)]))
+    return return_list
+
+
+def convert_peaks_to_indicies(x_label, y_label, peaks, x_radius, y_radius):
+    peak_indicies = []
     for peak in peaks:
         peak_x, peak_y = peak[0]
-        peak_array = []
+        peak_x_idxs = []
+        peak_y_idxs = []
         for i, x in enumerate(x_label):
             for j, y in enumerate(y_label):
                 if (x - peak_x) ** 2 / x_radius ** 2 + (
                     y - peak_y
                 ) ** 2 / y_radius ** 2 <= 1.0:
-                    peak_array.append(ion_matrix[i][j])
-        return_list.append(integration_function(peak_array))
-    return return_list
+                    peak_x_idxs.append(i)
+                    peak_y_idxs.append(j)
+        peak_indicies.append([peak_x_idxs, peak_y_idxs])
+    return peak_indicies
 
 
 def rt_move(peaks, rt_alignment_dict):
