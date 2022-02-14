@@ -44,21 +44,24 @@ def test_peaks_integrate():
         [[2, 2, 3, 3], [3, 4, 3, 4]],
         [[1, 1, 1, 2, 2, 2, 3, 3, 3], [1, 2, 3, 1, 2, 3, 1, 2, 3]],
     ]
-    assert glycoproteomics.peaks.integrate(
-        ion_matrix, peak_indices, np.max
-    ) == [4.0, 3.0]
+    assert glycoproteomics.peaks.integrate(ion_matrix, peak_indices, np.max) == [
+        4.0,
+        3.0,
+    ]
     # Test different integration function
-    assert glycoproteomics.peaks.integrate(
-        ion_matrix, peak_indices, np.sum
-    ) == [9.0, 19.0]
+    assert glycoproteomics.peaks.integrate(ion_matrix, peak_indices, np.sum) == [
+        9.0,
+        19.0,
+    ]
     # Test different radii
     peak_indices = [
         [[2, 2, 3, 3, 3], [3, 4, 2, 3, 4]],
         [[1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3], [1, 2, 3, 0, 1, 2, 3, 4, 1, 2, 3]],
     ]
-    assert glycoproteomics.peaks.integrate(
-        ion_matrix, peak_indices, np.sum
-    ) == [11.0, 21.0]
+    assert glycoproteomics.peaks.integrate(ion_matrix, peak_indices, np.sum) == [
+        11.0,
+        21.0,
+    ]
 
 
 def test_get_peak_indicies():

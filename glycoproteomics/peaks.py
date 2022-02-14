@@ -22,9 +22,7 @@ def find(ion_matrix, x_label, y_label, N, x_radius, y_radius):
     return return_peaks
 
 
-def integrate(
-    ion_matrix, peak_indicies, integration_function
-):
+def integrate(ion_matrix, peak_indicies, integration_function):
     return_list = []
     for peak in peak_indicies:
         return_list.append(integration_function(ion_matrix[tuple(peak)]))
