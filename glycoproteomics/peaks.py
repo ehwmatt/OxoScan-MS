@@ -1,4 +1,5 @@
 from . import persistence
+import numpy as np
 
 
 def find(ion_matrix, x_label, y_label, N, x_radius, y_radius):
@@ -35,14 +36,18 @@ def convert_peaks_to_indicies(x_label, y_label, peaks, x_radius, y_radius):
         peak_x, peak_y = peak[0]
         peak_x_idxs = []
         peak_y_idxs = []
-        for i, x in enumerate(x_label):
-            for j, y in enumerate(y_label):
-                if (x - peak_x) ** 2 / x_radius ** 2 + (
-                    y - peak_y
-                ) ** 2 / y_radius ** 2 <= 1.0:
-                    peak_x_idxs.append(i)
-                    peak_y_idxs.append(j)
-        peak_indicies.append([peak_x_idxs, peak_y_idxs])
+
+        x_mat = np.tile(np.array([x_label]).transpose(), (1, len(y_label)))
+        y_mat = np.tile(y_label, (len(x_label), 1))
+
+        peak_x_idxs, peak_y_idxs = (
+            (x_mat - peak_x) ** 2 / x_radius ** 2
+            + (y_mat - peak_y) ** 2 / y_radius ** 2
+            <= 1.0
+        ).nonzero()
+
+        peak_indicies.append([peak_x_idxs.tolist(), peak_y_idxs.tolist()])
+
     return peak_indicies
 
 
