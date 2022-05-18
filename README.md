@@ -2,12 +2,16 @@
 
 A repository containing code used for analysis of glycoproteomics spectra.
 
-## Installing
+## Getting set up
 
-Install Python requirements with:
+Set up a Python environment with `glycoproteomics` installed with the following commands.
+This will then let you run the various workbooks which use the library.
 
 ```
+virtualenv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
+pip install --upgrade -r requirements.txt -e .
 ```
 
 ## Running tests
