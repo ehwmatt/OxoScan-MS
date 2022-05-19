@@ -16,7 +16,7 @@ It is split into four parts:
 
 Spectra are read in and passed around between functions as hierarchical Python dictionaries, with the structure:
 
-```
+```python
 spectra_dict[rt_value][mz_value][ion_name] = intensity
 ```
 
@@ -24,7 +24,7 @@ spectra_dict[rt_value][mz_value][ion_name] = intensity
 
 This is some boilerplate code to import the various libraries and set up matplotlib:
 
-```
+```python
 import os
 import glycoproteomics
 import numpy as np
@@ -38,7 +38,7 @@ dpi = 80
 
 Read in the spectrum and have a look to see which ions were quantified:
 
-```
+```python
 spectrum = glycoproteomics.io.read_spectrum_file("tests/data/spectrum.txt.gz")
 ions = glycoproteomics.spectrum.list_ions(spectrum)
 print(ions)
@@ -47,7 +47,7 @@ print(ions)
 
 In order to make the spectrum easier to work with, we bin the spectrum into RT and MZ bins: 
 
-```
+```python
 rt_x_bin_size = 0.025
 mz_y_bin_size = 2.0
 
@@ -56,7 +56,7 @@ binned_spectrum = glycoproteomics.spectrum.bin(spectrum, rt_x_bin_size, mz_y_bin
 
 We merge the spectra from individual ions into a matrix, which we can then plot:
 
-```
+```python
 ion_matrix, x_label, y_label = glycoproteomics.spectrum.to_matrix(binned_spectrum, ions)
 glycoproteomics.plotting.plot_ion_matrix(ion_matrix, x_label, y_label, "spectrum.txt.gz", figure_size, dpi)
 plt.show()
@@ -66,7 +66,7 @@ plt.show()
 
 Once in the matrix format, we can perform peak calling on the spectra to identify the top 10 peaks:
 
-```
+```python
 top_N_peaks = 10
 
 # Peak quantification ellipse
@@ -92,7 +92,7 @@ plt.show()
 Set up a Python environment with `glycoproteomics` installed with the following commands.
 This will then let you run the various workbooks which use the library.
 
-```
+```bash
 virtualenv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -103,13 +103,13 @@ pip install --upgrade -r requirements.txt -e .
 
 Run the test suite with:
 
-```
+```bash
 pytest -k "not profiling" --cov=glycoproteomics
 ```
 
 To profile the code, and plot a graph of which functions take the most time, run:
 
-```
+```bash
 pytest -k profiling
 python -m gprof2dot -f pstats prof/peak_integration.out | dot -Tpdf -o prof/peak_integration.pdf
 ```
