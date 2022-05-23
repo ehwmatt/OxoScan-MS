@@ -59,7 +59,7 @@ mz_y_bin_size = 2.0
 binned_spectrum = glycoproteomics.spectrum.bin(spectrum, rt_x_bin_size, mz_y_bin_size, np.mean)
 ```
 
-Retention time binning parameters correspond directly to the cycle time of the MS method (e.g. for a 1.5s cycle, rt_x_bin_size = 0.025 min). Precursor m/z binning corresponds to the scanning quadrupole window width (where the continuous movement is binned into the window width / 5 - i.e. 10 m/z window corresponds to 5 x 2 m/z bins, mz_y_bin_size = 2.0).
+Retention time binning parameters correspond directly to the cycle time of the Scanning SWATH method (e.g. for a 1.5s cycle, `rt_x_bin_size = 0.025 min`). Precursor m/z binning corresponds to the scanning quadrupole window width (where the continuous movement is binned into the window width / 5 - i.e. 10 m/z window corresponds to `mz_y_bin_size = 2.0`).
 
 We merge the spectra from individual ions into a matrix, which we can then plot:
 
