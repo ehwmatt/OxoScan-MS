@@ -1,0 +1,465 @@
+---
+title: "OxoScan - Figure 2"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+# Quantitative profiling of plasma glycopeptides with OxoScan
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = T,
+                      echo = F,
+                      error = F,
+                      warning = F,
+                      cache = T,
+                      dev = "png",
+                      dpi = 300,
+                      fig.path = paste0(getwd(),
+                                        "/Plots/",
+                                        gsub(Sys.Date(), ## Make folder for date of running
+                                             pattern = "-", 
+                                             replacement = ""),
+                                        "_Plots/"))
+
+library(data.table)
+library(fs)
+library(tidyverse)
+library(gridExtra)
+library(magrittr)
+library(cowplot)
+### colour palettes
+library(viridisLite)
+library(PNWColors)
+library(viridis)
+library(circlize)
+
+
+## Directories
+root.dir <- getwd() ## Change as necessary to enclosing folder with script (from which /Data and /Plots are accessed)
+
+raw.data.dir <- paste0(root.dir, "/Data")
+
+plot.output.dir <- paste0(root.dir, "/Plots/")
+
+
+```
+
+``` {R Session info}
+
+#sessioninfo::session_info()
+
+```
+
+#### Read in deglycosylation experiment data (direct from DIA-NN `--extract` function)
+
+``` {R Read in Deglycosylation DIA-NN Output, echo = T, eval = T}
+
+## Read in treated/untreated plasma digests
+deglyco.non.treated <- dir_ls(raw.data.dir, regexp = "untreated") %>% ## No glycosidase treatment
+  fread() %>%
+  mutate(Exp = "- Glycosidase")
+
+deglyco.treated <- dir_ls(raw.data.dir, regexp = "16h") %>% ## + Glycosidase treatment
+  fread() %>% 
+  mutate(Exp = "+ Glycosidase") ## Add experiment condition
+
+deglyco.raw <- rbind(deglyco.non.treated,
+                     deglyco.treated)
+  
+                     
+  
+  
+
+## Format longer, remove zero values, scale and add labels by each ion 
+deglyco <- deglyco.raw %>%
+  mutate(mz = ((Window.Low+Window.High)/2)) %>% ## Use middle of each m/z bin for precursor m/z plotting
+  select(c('RT', 'mz', 'Exp', '204.087', '366.14', '274.092')) %>% 
+  pivot_longer(cols = 4:6, 
+               names_to = "Ion", 
+               values_to = "Intensity") %>% ## Make 'long' table
+  filter(Intensity != "0") %>% ## Remove 0 values
+  group_by(Ion) %>% ## Scale intensity across control/deglycosidase experiments by each ion
+  mutate(Scaled.Intensity = Intensity/max(Intensity)) %>%
+  ungroup() %>%
+  mutate(Ion.Label = ifelse(Ion == 274.092, ## Add labels describing oxonium ion (i.e. sugar monomer they derive from)
+                            yes = "NeuAc",
+                            no = ifelse(Ion == 204.087,
+                                             yes = "HexNAc",
+                                             no = "Hex+HexNAc")),
+         Exp = factor(Exp, levels = c("- Glycosidase", "+ Glycosidase"))) ## As factor for plotting
+
+#write_csv(deglyco %>%
+#            mutate(Exp = as.character(Exp),
+#                   Exp = ifelse(Exp == "- Glycosidase",
+#                                yes= "Without Glycosidase",
+#                                no = "With Glycosidase")), "SourceData/Figure2b_Figure2c.csv")
+```
+
+#### Oxonium ion map of plasma tryptic digest - Figure 2b
+
+``` {R Figure2b_OxoniumMap, eval = T, echo = T, results = F}
+
+## Just show oxonium ion map for 204
+deglyco %>%
+  filter(Ion == 204.087, 
+         Exp == "- Glycosidase") %>%
+  ggplot(aes(x = RT, 
+             y = mz)) + 
+  geom_point(aes(alpha = 4*Scaled.Intensity),
+             size = 0.4, 
+             shape = 15) +
+  theme_linedraw() + 
+  theme(strip.background = element_blank(),
+        strip.text = element_text(colour = "black", face = "bold", size = 14),
+        panel.grid = element_blank(),
+        strip.text.x = element_text(hjust = -0.01),
+        axis.title = element_text(size = 13),
+        plot.margin = unit(c(1, 1, 1, 1), "cm"),
+        ) +
+  scale_alpha_identity() +
+  scale_y_continuous(expand = expand_scale(mult = c(0, 0)),
+                     limits = c(999,1501),
+                     breaks = seq(1000,1500,by=100)) +  
+  scale_x_continuous(expand = expand_scale(mult = c(0, 0)),
+                     limits = c(5,45)) +
+  ylab("Precursor m/z") +
+  xlab("Retention Time") 
+
+#ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/Figure2b.jpeg", height = 5, width = 7, dpi=600)
+
+
+  
+
+```
+
+#### Oxonium map for all 3 ions - Figure S1b
+
+``` {R ED_Figure1c_OxoniumMap, fid.width = 12.5, fig.height = 10, eval = T, echo = T, results = F}
+
+## Format longer, remove zero values, scale and add labels by each ion 
+deglyco.all <- deglyco.raw %>%
+  filter(Exp == "- Glycosidase") %>% 
+  mutate(mz = ((Window.Low+Window.High)/2),
+          .keep = "unused",
+          .before = 1) %>% ## Use middle of each m/z bin for precursor m/z plotting
+  pivot_longer(cols = 3:11, 
+               names_to = "Ion", 
+               values_to = "Intensity") %>% ## Make 'long' table
+  filter(Intensity != "0") %>% ## Remove 0 values
+  group_by(Ion) %>% ## Scale intensity across control/deglycosidase experiments by each ion
+  mutate(Scaled.Intensity = Intensity/max(Intensity)) %>%
+  ungroup() 
+
+
+## Plot faceted for each ion
+deglyco.all %>%
+  ggplot(aes(x = RT, 
+             y = mz)) + 
+  geom_point(aes(alpha = 4*Scaled.Intensity),
+             size = 0.4, 
+             shape = 15) +
+  theme_linedraw() + 
+  theme(strip.background = element_blank(),
+        strip.text = element_text(colour = "black", face = "bold", size = 12, hjust = -0.01),        
+        axis.title = element_text(size = 13),
+        panel.grid = element_blank(),
+        plot.margin = unit(c(1, 1, 1, 1), "cm"),
+        ) +
+  scale_alpha_identity() +
+  scale_y_continuous(expand = expand_scale(mult = c(0, 0)),
+                     limits = c(999,1501),
+                     breaks = seq(1000,1500,by=100)) +  
+  scale_x_continuous(expand = expand_scale(mult = c(0, 0)),
+                     limits = c(5,45)) +
+  ylab("Precursor m/z") +
+  xlab("Retention Time") +
+  facet_wrap(~paste("m/z", Ion), ncol = 3)
+
+
+#write_csv(deglyco.all %>%
+#            select(mz, RT, Ion, Intensity), "SourceData/FigureS1c.csv")
+
+#ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/EDFigure1c.png", height = 8.5, width = 12.5, dpi=600)
+
+
+```
+
+#### Effect of treatment with glycosidase mix (16h) - Figure 2c
+
+``` {R Figure2c_2x2, eval = T, echo = F}
+
+## Faceted plot of plasma samples +/- glycosidase treatment, scaled by ion only
+deglyco %>%
+  filter(Ion != "274.092") %>% ## For the purpose of the plot, 274 shows same trend
+  ggplot(aes(x = RT, 
+             y = mz)) + 
+  geom_point(aes(alpha = 1.5*Scaled.Intensity),
+             size = 0.3, 
+             shape = 15) +
+  theme_linedraw() + 
+  theme(strip.background = element_blank(),
+        strip.text = element_text(colour = "black", face = "bold", size = 12),
+        axis.title = element_text(size = 13),
+        panel.grid = element_blank(),
+        strip.text.x = element_text(hjust = -0.01),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm")) +
+  scale_alpha_identity() +
+  scale_y_continuous(expand = expand_scale(mult = c(0, 0))) +  
+  scale_x_continuous(expand = expand_scale(mult = c(0, 0)),
+                     limits = c(5,45)) +
+  ylab("Precursor m/z") +
+  xlab("Retention Time") +
+  facet_grid(Exp~paste("m/z = ", Ion, "\n", Ion.Label,sep="")) 
+
+#ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/Figure2c.jpeg", height = 5, width = 7, dpi=600)
+ 
+```
+
+#### ~99% reduction in signal intensity upon deglycosidase treatment
+
+``` {R Signal intensity across treatments, echo = F, eval = T}
+
+### total signal in glyco/deglyco
+deglyco %>%
+  group_by(Ion, Exp) %>% ## Sum of oxonium intensities for each ion +/- glycosidase treatment
+  summarise(sum = sum(Intensity), .groups = "drop_last") %>% ## Non-scaled intensity used
+  pivot_wider(values_from = sum,
+              names_from = Exp) %>%
+  summarise(`% Signal Deglycosylated/Control` = 100 * `+ Glycosidase` /  `- Glycosidase`,
+            .groups = "drop") ## %age signal in deglycosylated sample compared to untreated
+
+```
+### Comparison of repeat injections of a plasma tryptic digest
+
+``` {R Figure2d_Correlation, fig.width = 5, fig.height = 5}
+
+rep.df <- dir_ls(raw.data.dir,
+                regexp = "TwoReplicates") %>%
+  fread() %>%
+  pivot_wider(values_from = "value",
+              names_from = rep) %>%
+  dplyr::rename('Replicate 1' = `2`,
+         'Replicate 2' = `3`)
+
+## Colour points by density - use function below (from: https://slowkow.com/notes/ggplot2-color-by-density/)
+
+get_density <- function(x, y, ...) {
+  dens <- MASS::kde2d(x, y, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii])
+}
+
+
+rep.df$density <- get_density(log10(rep.df$`Replicate 1`), log10(rep.df$`Replicate 2`), 
+                              n = 5000,
+                              h = c(0.1,0.1))
+
+
+### Calculate spearman's rank correlation coefficient - no assumption of normality (non-parametric)
+
+corr.coeff <- cor(rep.df$`Replicate 2`, rep.df$`Replicate 1`, method = "spearman")
+
+col.scale <- c(min(rep.df$density), ((max(rep.df$density) + min(rep.df$density))/2), max(rep.df$density)) ## Define colour scale by density
+
+col <- colorRamp2(breaks = col.scale, colors = c("dark blue", "light blue", "light yellow")) ## Make scale
+
+rep.df %>%
+  ggplot(aes(x = log10(`Replicate 1`),
+             y = log10(`Replicate 2`),
+             colour = density
+             )) +
+  geom_point(size = 2,
+             alpha = 0.6,
+             shape = 19) +
+  theme_linedraw() + 
+  scale_colour_gradient2(low = "dark blue",
+                         mid = "light yellow",
+                         high = "dark red", 
+                         midpoint = ((max(rep.df$density) + min(rep.df$density))/2)) +
+  theme(panel.grid = element_blank(),
+        legend.position = "none",        
+        axis.title = element_text(size = 13)) + 
+  annotate("text",
+           x = 2, y = 3.5, 
+           parse = T,
+           label = expression(rho~"= 0.995"),
+           colour = "black", 
+           size = 5,
+           fontface = "bold") +
+  xlab("log10(Replicate 1)") + 
+  ylab("log10(Replicate 2)")
+
+#write_csv(rep.df, "Figure2d.csv")
+#ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/Figure2d.pdf", height = 5, width = 5)
+
+
+```
+
+
+
+
+### Quantitative performance benchmark - Plasma spike-in to E. coli background
+
+``` {r Figure2e_SpikeBothPlots, fig.height = 5, fig.width = 10}
+
+spike.raw <- dir_ls(raw.data.dir,
+       regexp = "20220221_Spike_") %>%
+  fread() %>%
+  mutate(exp = sub(spectrum_name,
+                   pattern = "20210723_glyco_plasma_ecoli_spike_2ug_(.).wiff.dia.extracted.txt.*",
+                   replacement = "\\1")) %>%
+  filter(exp %in% c(2:4,6)) %>%
+  left_join(data.frame(
+    exp = as.character(c(2:4,6)), ## Match up experiment labels
+    Plasma = c(5,20,40,80),
+    Ecoli = c(95,80,60,20))) %>% ## Plasma / E.coli proportions
+  group_by(Plasma, peak_num) %>%
+  mutate(Intensity = sum(value)) %>% ### Sum oxonium ion intensities for each feature (in each sample)
+  ungroup() %>%
+  select(Plasma, Ecoli, peak_num, merged_rt, merged_mz, persistence, aligned_rt,  aligned_mz, Intensity) %>%
+  distinct()
+  
+### Read in E.coli only sample to use as exclusion list (i.e. quantify only plasma features for spike-in)
+ecoli.ref <- dir_ls(raw.data.dir, 
+                    regexp = "20220515_.*EColi") %>%
+  fread() %>%
+  filter(ion == 138.055) %>% ## single value per peak_num
+  mutate(unique.id = paste(merged_rt, merged_mz, sep = "_")) %>% ## make RT/mz coordinate for each peak to search for in spiked experiment
+  pull(unique.id) %>%
+  unique()
+
+### filter with 0.25min tolerance for E.coli peaks in spike-in data -- use to exclude E.coli features from quant analysis
+ecoli.exclude <- data.frame()
+
+
+for(i in seq_along(ecoli.ref)){
+
+  ref_rt <- ecoli.ref[i] %>% ## pull out reference RT
+    sub(pattern = "(.*)_\\d*",
+        replacement = "\\1") %>%
+    as.numeric()
+  
+  ref_mz <- ecoli.ref[i] %>% ## pull out reference mz
+    sub(pattern = ".*_(\\d*)",
+        replacement = "\\1") %>%
+    as.numeric()
+  
+  ## search (with +/- 0.2 minute RT tolerance for feature in spike-in data)
+  ecoli.exclude <- rbind(ecoli.exclude,
+                         spike.raw %>%
+                           filter(merged_rt > ref_rt - 0.3, ## with 0.3 min tolerance
+                                  merged_rt < ref_rt + 0.3,
+                                  merged_mz == ref_mz)) ## no m/z tolerance, should not change
+
+}
+
+
+### add in some filtering steps for the peaks
+spike.filtered <- spike.raw %>% 
+  filter(!peak_num %in% ecoli.exclude$peak_num) 
+
+
+#### how many peaks - checkpoint
+paste(unique(spike.filtered$peak_num) %>% unique() %>% length(),
+      "filtered plasma peaks used for quant out of",
+      unique(spike.raw$peak_num) %>% unique() %>% length(),
+      "total called")
+
+
+### calculate fold-changes to reference (dilution = 1)
+spike.fc <- spike.filtered %>%
+  select(peak_num, Plasma, Intensity) %>%
+  pivot_wider(names_from = Plasma,
+              values_from = Intensity) %>%
+  mutate(`Dilution.0.5` = `80`/`40`, ## 80% plasma compared to ref (40% plasma) - theoretical dilution (from ref) = 0.5
+         `Dilution.2` = `20`/`40`, ## 20% plasma compared to ref (40% plasma) - theoretical dilution (from ref) = 2
+         `Dilution.8` = `5`/`40`) %>% ## 5% plasma compared to ref (40% plasma) - theoretical dilution (from ref) = 8
+  select(peak_num, `40`, `Dilution.0.5`, `Dilution.2`, `Dilution.8`) %>%
+  dplyr::rename(Ref.Intensity = "40") %>%
+  pivot_longer(cols = 3:5,
+               names_to = "Dilution.Factor",
+               values_to = "Fold-change") %>%
+  mutate(Dilution.Factor = sub(Dilution.Factor,
+                        pattern = "Dilution\\.",
+                        replacement = ""),
+         Dilution.Factor = factor(Dilution.Factor, levels = c('0.5', '2', '8'))) %>% ## No pun intended
+  filter(Ref.Intensity > 1) ## remove extreme values
+
+
+spike.withboxplot <- plot_grid(
+  spike.fc %>%
+    ggplot(aes(x = log2(Ref.Intensity),
+               y = log2(`Fold-change`),
+               colour = Dilution.Factor)) + 
+    geom_point(alpha = 0.75,
+               size = 2.5,
+               shape = 20) + 
+    theme_linedraw() +
+    theme(panel.grid = element_blank(),
+          legend.position = "none",        
+          axis.title = element_text(size = 13),
+          plot.margin = unit(c(5.5, 0, 5.5, 0), "pt")) + 
+    scale_colour_manual(values = pnw_palette("Sunset2", 3)) +
+    scale_y_continuous(breaks = seq(-10,4,by=2),
+                       limits = c(-6,4)) +
+    scale_x_continuous(breaks = seq(0,16,by=4),
+                       limits = c(2,15)) +
+    geom_hline(yintercept = 1,
+                colour = pnw_palette("Sunset2", 3)[1],
+                linetype = "dashed") +  
+    geom_hline(yintercept = -1,
+                colour = pnw_palette("Sunset2", 3)[2],
+                linetype = "dashed") +   
+    geom_hline(yintercept = -3,
+                colour = pnw_palette("Sunset2", 3)[3],
+                linetype = "dashed") + 
+    guides(colour=guide_legend(title="Dilution\nFactor")) +
+    ylab("log2(Fold-Change)") + 
+    xlab("log2(Reference Intensity)") 
+  
+    ,
+  
+  spike.fc %>%
+    ggplot(aes(x=Dilution.Factor,
+             y=log2(`Fold-change`),
+             fill = Dilution.Factor)) + 
+    geom_boxplot(alpha=0.85,
+                 outlier.alpha = 0) + 
+    geom_hline(yintercept = 1,
+                colour = pnw_palette("Sunset2", 3)[1],
+                linetype = "dashed") +  
+    geom_hline(yintercept = -1,
+                colour = pnw_palette("Sunset2", 3)[2],
+                linetype = "dashed") +   
+    geom_hline(yintercept = -3,
+                colour = pnw_palette("Sunset2", 3)[3],
+                linetype = "dashed") +
+    theme_linedraw() + 
+    scale_y_continuous(breaks = seq(-10,4,by=2),
+                       limits = c(-6,4)) +
+    ylab("") +
+    xlab("log2(Reference Intensity)") +
+    scale_fill_manual(values = pnw_palette("Sunset2", 3)) +
+    guides(fill=guide_legend(title="Dilution\nFactor")) +
+    theme(panel.grid = element_blank(),
+          axis.text.x = element_text(colour = "white"),
+          axis.text.y = element_blank(),        
+          axis.ticks = element_blank(),
+          axis.title.x = element_text(colour = "white"),
+          axis.line = element_blank(),
+          plot.margin = unit(c(5.5, 0, 5.5, 0), "pt"))
+  ,
+  ncol = 2,
+  rel_widths = c(0.7,0.3)) 
+
+spike.withboxplot
+
+#write_csv(spike.fc, "SourceData/Figure2e.csv")
+#ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/Figure2e.pdf", height = 5, width = 10)
+
+```

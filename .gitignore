@@ -5,3 +5,6 @@ __pycache__
 prof/
 .DS_Store
 *.egg-info
+**SourceData/
+**Plots/
+**Data/

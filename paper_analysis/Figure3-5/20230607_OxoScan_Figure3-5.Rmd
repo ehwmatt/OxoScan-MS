@@ -1,0 +1,2575 @@
+---
+title: "OxoScan - Figure 3-5"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+# COVID-19 glycoproteomic analysis with OxoScan
+
+
+```{R Setup, include=FALSE}
+
+# Chunk options
+knitr::opts_chunk$set(eval = T,
+                      echo = F,
+                      error = F,
+                      warning = F,
+                      message = F,
+                      cache = T,
+                      fig.align = "left",
+                      dev = "png",
+                      dpi = 300,
+                      fig.path = paste0(getwd(),
+                                        "/Plots/",
+                                        gsub(Sys.Date(), ## Make folder for date of running
+                                             pattern = "-", 
+                                             replacement = ""),
+                                        "_Plots/"))
+
+## Directories
+root.dir <- getwd() ## Change as necessary to enclosing folder with script (from which /Data and /Plots are accessed)
+
+raw.data.dir <- paste0(root.dir, "/Data/")
+
+plot.output.dir <- paste0(root.dir, "/Plots/")
+
+## Packages
+library(data.table)
+library(fs)
+library(tidyverse)
+library(gridExtra)
+library(magrittr)
+library(cowplot)
+library(readxl)
+library(ComplexHeatmap)
+library(EnvStats)
+library(ggrepel)
+library(RColorBrewer)
+library(fuzzyjoin)
+library(scales)
+library(dendextend)
+library(ggforce)
+library(grid)
+library(ggplotify)
+library(limma)
+library(ComplexHeatmap)
+
+### colour palettes
+library(viridisLite)
+library(PNWColors)
+library(MetBrewer)
+library(viridis)
+library(circlize)
+library(xlsx)
+library(openxlsx)
+
+
+
+## functions
+source(dir_ls("Functions", regexp = "20230607_Glyco_Functions"))
+
+```
+
+```{R Gas-phase fractionation data across 500-2000Da mass range}
+
+gpf <- rbind(dir_ls("Data/GPF", regexp = ".txt")[1] %>% fread() %>% mutate(fraction = "500-1000"),
+             
+  dir_ls("Data/GPF", regexp = ".txt")[2] %>% fread() %>% mutate(fraction = "1000-1500"),
+             
+  dir_ls("Data/GPF", regexp = ".txt")[3] %>% fread() %>% mutate(fraction = "1500-2000")) %>%
+  mutate(mz = (Window.Low + Window.High) / 2) %>%
+  pivot_longer(cols=4:10,
+               names_to="Ion",
+               values_to="Intensity") %>%
+  filter(Intensity != 0,
+         !is.na(Intensity)) %>%
+  group_by(RT, mz, fraction) %>%
+  summarise(Sum.Intensity = sum(Intensity)) %>%
+  ungroup() %>%
+  mutate(Norm.Intensity = Sum.Intensity / max(Sum.Intensity))
+
+#write_csv(gpf, "SourceData/EDFigure3a.csv")
+
+gpf.plot <- gpf %>%
+  ggplot(aes(x = RT, 
+             y = mz)) + 
+  geom_point(aes(alpha = 1.5*Norm.Intensity),
+             size = 0.5, 
+             shape = 15) +
+  theme_linedraw() + 
+  theme(strip.background = element_blank(),
+        strip.text = element_text(colour = "black", face = "bold", size = 12),
+        axis.title = element_text(size = 13),
+        panel.grid = element_blank(),
+        strip.text.x = element_text(hjust = -0.01),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm")) +
+  scale_alpha_identity() +
+  scale_y_continuous(expand = expand_scale(mult = c(0, 0))) +  
+  scale_x_continuous(expand = expand_scale(mult = c(0, 0))) +
+  ylab("Precursor m/z") +
+  xlab("Retention Time") 
+
+
+```
+
+``` {R Import metadata}
+
+## Import patient metadata to join with OxoScan output
+meta <- dir_ls(paste0(raw.data.dir, "Kuebler"), regexp = "Metadata") %>%
+  fread()
+
+```
+
+
+
+<p>&nbsp;</p>
+
+<p>&nbsp;</p>
+
+
+#### Import OxoScan output for COVID-19 cohort
+
+``` {R Import and reformat OxoScan output }
+
+## Import raw OxoScan output
+oxoscan.raw <- dir_ls(paste0(raw.data.dir, "Kuebler"), regexp = "Exclude2.tsv.gz") %>%
+  fread()
+
+## Reformat filenames, metadata
+oxoscan.reformat <- oxoscan.raw %>% 
+  mutate(spectrum_name = sub(spectrum_name, ## wrangle sample information from filename
+                             pattern = "20210702_Kuebler_(.*).wiff.dia.extracted.txt",
+                             replacement = "\\1")) %>%
+  separate(spectrum_name, ### extract injection info for each sample from filenames
+           into = c("injno","plate","well","File.Name","rep"),
+           sep = "_",
+           remove = F) %>%
+  mutate(File.Name = sub(File.Name, ### reformat patient IDs
+                  pattern = "(HD-.*)[[:upper:]]",
+                  replacement = "\\1"),
+         File.Name = sub(File.Name, ### reformat patient IDs
+                  pattern = "(CV-.*)[[:upper:]]",
+                  replacement = "\\1"),
+         Run = paste(File.Name, rep, sep = "_"),) %>% ### Run = File.Name + replicate
+  mutate(type = ifelse(str_detect(File.Name,"Plasma") == TRUE, ### Make sample type groups (Bio, QC)
+                       yes = ifelse(str_detect(File.Name,"Pooled"),
+                                         yes = "MS.QC",
+                                         no = "SP.QC"),
+                       no="Bio"),
+         type = ifelse(str_detect(File.Name,"Blank") == TRUE, ## Blanks if nothing else
+                       yes="Blank",
+                       no=type),
+         injno = sprintf("%03d", as.numeric(injno))) %>% ### Leading 0s in injection numbers
+  left_join(meta %>%
+              rename(File.Name = "Patient.ID"), by = "File.Name") ### join metadata
+
+## Print number of peaks in raw data
+paste(oxoscan.raw %>%
+        pull(peak_num) %>% ## peak_num = unique glycopeptide features called by OxoScan
+        unique() %>%
+        length(),
+      "glycopeptide features called and quantified across Kuebler cohort")
+```
+
+
+
+<p>&nbsp;</p>
+
+<p>&nbsp;</p>
+
+
+
+
+#### OxoScan output table:
+``` {R Give example of oxoscan.raw, echo = F, eval = T}
+
+head(oxoscan.raw)
+
+```
+
+
+``` {R Filtering samples by total Intensity}
+
+### Remove samples with low total Intensity (issue with prep/inj)
+
+## Take sum of signals from each injection, compute z-scores of distribution 
+## and filter out any samples z < -1.5 (empirical threshold based on observed low abundance)
+remove.low.intensity.samples <- oxoscan.reformat %>%
+  filter(!str_detect(spectrum_name, "Blank")) %>%
+  select(injno, value) %>%
+  distinct() %>%
+  group_by(injno) %>%
+  summarise(sum = sum(value)) %>% ## sum = total oxonium Intensity per run
+  filter(!str_detect(injno, "lank")) %>% ## remove blanks from analysis (these should have very low Intensity)
+  mutate(mean = mean(sum),  ## calculate mean 
+         z = (sum - mean(sum)) / sd(sum)) %>% ## and distribution of total intensities across all samples
+  filter(z < -1.5) %>% ## filter out samples with very low Intensity compared to cohort whole
+  pull(injno) ## make vector of those files to remove for filtering downstream
+
+### Use oxoscan.sample.filters for generating feature filter thresholds
+oxoscan.sample.filters <- oxoscan.reformat %>%
+  filter(! str_detect(spectrum_name, "Blank"),
+         ! injno %in% remove.low.intensity.samples) 
+
+
+``` 
+
+
+<p>&nbsp;</p>
+
+<p>&nbsp;</p>
+
+#### Normalised sample intensities across 162 injection cohort (Figure 3b) &nbsp;  
+
+
+``` {R Figure3b_CohortNormalised, fig.width = 4.5, fig.height = 3}
+
+oxoscan.normalised <- oxoscan.sample.filters %>%
+  ungroup() %>%
+  group_by(Run) %>% ## 'Run' is *patient*_*replicate* --- unique for each well/injection
+  mutate(Norm.Factor = median(value)) %>% ## median feature Intensity per sample (normalisation factor)
+  ungroup() %>% ## median normalisation
+  mutate(Normalised.Intensity = value/Norm.Factor) %>%
+  left_join(data.frame(
+    injno = sort(unique(oxoscan.sample.filters$injno)), ## Add acquisition time in days (48 spd)
+    Days = seq(from = (1/48),
+               to = (148/48), by = (1/48))))# %>%
+  #select(-value) ## Remove un-normalised value
+  
+#### plot normalisation of medians for batch
+ggplot(oxoscan.normalised,
+       aes(x = Days,
+           y = log10(Normalised.Intensity),
+           fill = type,
+           group = injno)) +
+  geom_boxplot(outlier.fill = NA,
+               outlier.colour = NA,
+               lwd = 0.2,
+               alpha = 0.75) + 
+  theme_linedraw() + 
+  theme(#axis.text.x = element_blank(),
+        panel.grid = element_blank(),
+        legend.position = "none",
+        strip.text = element_text(hjust = -0.01, colour = "black", face = "bold", size = 10),
+        strip.background = element_blank(),
+        ) + 
+  scale_x_continuous(breaks = c(0:3),
+                     expand = expansion(0,0.025)) +
+  xlab("Acquisition Time (Days)") +
+  ylab("log10(Intensity)") +
+  ylim(-2.5, 2.5) + 
+  scale_fill_manual(values = pnw_palette("Sunset2",n=3)) 
+  
+###write_csv(oxoscan.normalised, "SourceData/Figure3b.csv")
+
+##ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/Figure3b.pdf", height = 3, width = 4.5)
+
+```
+
+
+
+
+``` {R Filtering ions/features used for downstream quantification and analysis}
+
+### Optional: remove older input files as you go
+# rm(oxoscan.raw)
+
+## Make dataset for assessing which ions to use for quantification per feature
+ion.interferences <- oxoscan.normalised %>%
+  group_by(peak_num, spectrum_name) %>% 
+  mutate(part = Normalised.Intensity/sum(Normalised.Intensity)) %>% ## fraction of total feature Intensity per ion (per sample)
+  ungroup() %>%
+  group_by(peak_num, ion) %>% 
+  mutate(part.cv = 100*sd(part)/mean(part)) %>% ### variation in fraction for each ion across cohort (per feature)
+  ungroup() 
+
+
+### Include thresholds for removing features with:
+
+## Inconsistent oxonium ion proportions across cohort (indicative the observed response could be due to interference)
+# Filter at CV (of oxonium ion proportion / feature) < 50% across cohort
+filter.quant.part.cv <- ion.interferences %>%
+  mutate(id = paste(peak_num, ion, sep = "_")) %>%
+  filter(part.cv < 50) %>%
+  pull(id) %>%
+  unique()
+
+## Ions with high data completeness for each feature across cohort
+# Keep ions with non-zero values in all runs (129) and >= 3/7 ions present in each sample per peak
+filter.quant.nonzero.ions <- ion.interferences %>%
+  filter(!str_detect(spectrum_name, "Plasma")) %>% ## remove MS.QC / SP.QC - look only at clinical samples
+  group_by(part.cv, peak_num, ion) %>%
+  filter(part > 0) %>% ## filter out 0 values
+  summarise(n.present = n(),
+            .groups = "drop") %>% ## number of non-zero intensities per ion (per feature)
+  distinct() %>%
+  filter(n.present == 129) %>% ## ions detected in all clinical samples
+  group_by(peak_num) %>%
+  mutate(n.ion = n()) %>% ## number of ions per feature detected in all clinical samples
+  filter(n.ion > 2) %>% ## keep features with >2 consistently identified oxonium ions across cohort
+  mutate(id = paste(peak_num, ion, sep = "_")) %>% ## list of ions to keep for quantification of each feature
+  pull(id) %>%
+  unique() 
+
+
+## Interfering signals
+# Remove any features (peak_num) where one ion is almost entire (>85%) of total signal (indicates interference with non-oxonium fragment)
+filter.remove.interferences <- ion.interferences %>%
+  filter(part > 0.85) %>% 
+  pull(peak_num) %>%
+  unique() %>% 
+  sort()
+
+feat.triplicate.cvs <- oxoscan.normalised %>%
+  select(File.Name, rep, Run, Normalised.Intensity, type, ion, peak_num) %>%
+  distinct() %>%
+  filter(type == "Bio") %>% ## clinical samples only
+  group_by(File.Name, rep, peak_num) %>% 
+  summarise(Summed.Intensity = sum(Normalised.Intensity),
+            .groups = "drop") %>% ## sum together ions for each feature
+  group_by(peak_num, File.Name) %>%
+  mutate(cv = 100*sd(Summed.Intensity)/mean(Summed.Intensity)) %>% ## technical variability for each feature across cohort
+  ungroup() %>%
+  group_by(peak_num) %>% ## for each feature, look at median CV
+  summarise(median.cv = median(cv)) 
+
+### Filter based on above thresholds and reformat filenames/metadata
+
+# extract File.Name, injection order, mutate sample type (Bio/QC/blank), left_join metadata (meta)
+oxoscan.filtered <- oxoscan.normalised %>%
+  mutate(id = paste(peak_num, ion, sep = "_")) %>%
+  filter(id %in% filter.quant.nonzero.ions,
+         id %in% filter.quant.part.cv,
+         ! peak_num %in% filter.remove.interferences,
+         merged_mz < 1392, # features at boundaries poorly identified by persistent homology
+         merged_mz > 808
+         ) %>% # remove when Q1 window reaches boundary (i.e. 10Da away)
+  group_by(peak_num, spectrum_name) %>%
+  mutate(Summed.Norm.Intensity = sum(Normalised.Intensity),
+         Summed.Value = sum(value) ## Non-median normalised
+         ) %>% ### use sum of oxonium ion intensities going forward
+  ungroup() %>%
+  select(-id, -ion, -Normalised.Intensity, -persistence, -merged_height, -spectrum_name, -injno, -well, -plate, -aligned_rt, -aligned_mz) %>% ## remove columns for ions
+  distinct() ## remove dupliucate rows
+  
+
+```
+
+
+<p>&nbsp;</p>
+
+<p>&nbsp;</p>
+
+#### Variation in instrument (MS), whole process (SP) and clinical samples (Figure 3c)
+
+``` {R Figure3c_TechnicalVariation, Sample, fig.width = 5, fig.height = 3}
+
+df.cv <- oxoscan.filtered %>%
+  filter(type == "Bio") %>%
+  group_by(File.Name, peak_num) %>% 
+  summarise(Intensity = mean(Summed.Norm.Intensity), .groups = "drop") %>% ## mean across 3 technical replicates
+  group_by(peak_num) %>%
+  summarise(n=n(),
+            cv = 100*sd(Intensity)/mean(Intensity),
+            .groups = "drop") %>%
+  mutate(`Sample Type` = "Biological")
+
+spqc.cv <- oxoscan.filtered %>%
+  filter(type == "SP.QC") %>%
+  group_by(peak_num) %>%
+  summarise(n=n(),
+           cv = 100*sd(Summed.Norm.Intensity)/mean(Summed.Norm.Intensity),
+           .groups = "drop") %>%
+  mutate(`Sample Type` = "Sample Prep QC")
+
+msqc.cv <- oxoscan.filtered %>%
+  filter(type == "MS.QC") %>% 
+  group_by(peak_num) %>%
+  summarise(n=n(),
+           cv = 100*sd(Summed.Norm.Intensity)/mean(Summed.Norm.Intensity),
+           .groups = "drop") %>%
+  mutate(`Sample Type` = "Mass Spec QC")
+
+data.frame(`Sample Type` = c("MS.QC", "SP.QC", "Biological"),
+           `Median CV` = 
+             c(msqc.cv %>% ## median cv in MS.QC
+                 summarise(median.cv = median(cv)) %>%
+                 pull(median.cv) %>%
+                 round(2),
+               spqc.cv %>% ## median cv in SP.QC
+                 summarise(median.cv = median(cv)) %>%
+                 pull(median.cv) %>%
+                 round(2),
+               df.cv %>% ## median cv in clinical samples
+                 summarise(median.cv = median(cv)) %>%
+                 pull(median.cv) %>%
+                 round(2)))
+
+### plot distributions of CV by samples type (capture technical and biologic)
+qc.distribution.df <- rbind(df.cv, msqc.cv, spqc.cv)
+
+qc.distribution.df %>%
+  ggplot(aes(x = cv, 
+             fill = `Sample Type`)) + 
+  #geom_histogram(position = "identity",binwidth = 2,alpha = 0.5) +
+  geom_density(alpha = 0.5, size = 0.2) + 
+  theme_linedraw() +
+  scale_colour_manual(name = "Sample Type") + 
+  scale_x_continuous(expand = expansion(mult = c(0.0, 0.1)),
+                     limits = c(0,105),
+                     breaks = seq(0,120,by=20)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1)))  + 
+  xlab("Coefficient of Variation / %") + 
+  ylab("Density") +
+  theme(legend.position=c(0.75,.75),
+        panel.grid = element_blank(),
+        axis.text.y =  element_blank(),
+        strip.text = element_text(hjust = -0.01, colour = "black", face = "bold", size = 10),
+        strip.background = element_blank()) + 
+  scale_fill_manual(values = pnw_palette("Sunset2",n=3)) 
+
+###write_csv(qc.distribution.df, "SourceData/Figure3c.csv")
+##ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/Figure3c.pdf", height = 3, width = 5)
+
+
+```
+
+
+``` {r ED_Figure_3b_Feat_CVs.png, fig.width = 4, fig.height = 4}
+
+### compute median CV (within triplicates) for each feature across clinical samples only
+median.cv.techrep <- filter(oxoscan.normalised, 
+                            type == "Bio") %>% ## take only clinical samples
+  group_by(File.Name, rep, peak_num) %>%
+  summarise(Normalised.Intensity = sum(Normalised.Intensity),
+            .groups = "drop") %>% ## Sum for all ions per feature
+  group_by(File.Name, peak_num) %>%
+  mutate(cv = 100*sd(Normalised.Intensity)/mean(Normalised.Intensity), ## technical variability for peak
+         intensity = mean(Normalised.Intensity)) %>% ## mean intensity across 3 reps (unless removed)
+  ungroup() %>%
+  select(File.Name, peak_num, cv) %>%
+  distinct() %>%
+  group_by(peak_num) %>%
+  summarise(median.cv = median(cv))
+
+
+## pull out the number of features below x median CV values
+norm.cv.features <- data.frame(cv.value = 1:100)
+
+for(i in 1:100){
+norm.cv.features$nfeat[i] = sum(median.cv.techrep$median.cv < i, na.rm = T)
+}
+
+### plot curve of median CV vs number of features
+
+## cutoff for median CV == 20%
+yval <- norm.cv.features$nfeat[norm.cv.features$cv.value == 20]
+
+ggplot(norm.cv.features, aes(x = cv.value,
+                             y = nfeat)) + 
+  geom_line() + 
+  geom_segment(aes(x=0, y=yval, xend=20, yend=yval), colour = "black", linetype = "dotted", size = 0.5) +
+  geom_segment(aes(x = 20, y=yval, xend =20, yend= 0), , colour = "black", linetype = "dotted", size = 0.5) + 
+  scale_x_continuous(expand = expansion(mult = c(0.0, 0.0)),
+                     breaks = seq(0,70,10),
+                     limits=c(0,52)) +
+  scale_y_continuous(expand = expansion(mult = c(0.0, 0.0))) +  theme_linedraw() +
+  xlab("Median CV") + 
+  ylab("Number of features") + 
+  theme(panel.grid = element_blank(),
+        strip.background = element_rect(fill = "white", colour = "white"),
+        strip.text = element_text(colour = "black", face = "bold", size = 12, hjust = -0.01))
+
+
+##write_csv(norm.cv.features, "SourceData/EDFigure_3b.csv")
+##ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/EDFigure3b.pdf", height = 4, width = 4)
+
+
+```
+
+
+
+<p>&nbsp;</p>
+
+<p>&nbsp;</p>
+
+#### Checkpoint - peaks quantified by OxoScan across cohort:
+
+
+``` {R Make datasets for downstream statistical testing/quantification}
+
+#### oxoscan.quant - take mean for triplicate samples and take forward for statistical testing
+oxoscan.quant <- oxoscan.filtered %>%
+  filter(type == "Bio") %>% ## take only clinical samples
+  ungroup() %>%
+  group_by(peak_num, File.Name, I.WHO, F.Severity, merged_rt) %>%
+  summarise(Intensity = mean(Summed.Value), ## Use for PRM comparison (without median norm)
+            Intensity.Norm = mean(Summed.Norm.Intensity)) %>% ## mean intensity across 3 reps (unless removed)
+  ungroup() %>%
+  distinct() 
+
+
+oxoscan.stringent <- oxoscan.filtered %>%
+  left_join(feat.triplicate.cvs, by = "peak_num") %>%
+  filter(type == "Bio", ## take only clinical samples
+         median.cv < 20) %>% ## stringent filtering of quantification
+  group_by(peak_num, File.Name) %>%
+  mutate(Intensity = mean(Summed.Norm.Intensity)) %>% ## mean intensity across 3 reps (unless removed)
+  ungroup() %>%
+  select(-c(rep, Norm.Factor, Summed.Norm.Intensity, Run)) %>%
+  distinct() 
+
+
+### peaks taken onwards from very stringent filtering
+paste(pull(oxoscan.quant, peak_num) %>% unique() %>% length(), "features taken forward following interference filtering")
+
+paste(pull(oxoscan.stringent, peak_num) %>% unique() %>% length(), "features quantified robustly (median CV < 20%) across clinical cohort")
+
+number_of_peaks <- nrow(oxoscan.normalised)
+
+rt.shift <- oxoscan.normalised %>%
+  mutate(rt_diff = abs(merged_rt - aligned_rt)) %>%
+  filter(type != "blank",
+         rt_diff < 0.2) %>%
+ nrow() / number_of_peaks * 100 
+    
+## #write_csv(oxoscan.quant, "Data/OxoScan_COVID19_QuantTable.csv")
+
+paste(round(rt.shift, 2),
+  "% of features with retention time shift below 12s", sep = "")
+```
+
+
+
+
+``` {R Differential expression analysis with limma}
+
+### make matrix of log2 intensity values
+limma.matrix <- dplyr::select(oxoscan.quant, File.Name, peak_num, 
+                        I.WHO, 
+                        F.Severity,
+                        Intensity.Norm) %>%
+  mutate(Intensity.Norm = log2(Intensity.Norm)) %>% ## log2 transform
+  distinct() %>%
+  pivot_wider(values_from = Intensity.Norm, ## make matrix of features vs samples
+              names_from = peak_num) %>%
+  distinct()
+
+
+#scale and center
+limma.matrix.filter <- limma.matrix[,4:ncol(limma.matrix)]
+
+rownames(limma.matrix.filter) = limma.matrix$File.Name
+
+
+### limma define experimental setup
+### treatments and controls
+healthy <- meta %>%
+  filter(F.Severity == "Healthy") %>%
+  pull(Patient.ID)
+
+mild <- meta %>%
+  filter(F.Severity == "Mild") %>%
+  pull(Patient.ID)
+
+moderate <- meta %>%
+  filter(F.Severity == "Moderate") %>%
+  pull(Patient.ID)
+
+severe <- meta %>%
+  filter(F.Severity == "Severe") %>%
+  pull(Patient.ID)
+
+
+## make experimental group comparison matrix
+df.fit <- t(limma.matrix.filter)[,c(healthy,mild,moderate,severe)] # define design according to limma package framework
+
+factors <- factor(c(rep("healthy",length(healthy)),
+                    rep("mild",length(mild)),
+                    rep("moderate",length(moderate)),
+                    rep("severe",length(severe))))
+
+design <- model.matrix(~0 + factors)
+
+fit <- lmFit(df.fit, design = design)
+
+eb.fit <- eBayes(fit)
+
+cont.matrix <- makeContrasts(HealthyvsSevere = factorshealthy-factorssevere,
+                             levels = design)
+
+fit2 <- contrasts.fit(fit, cont.matrix)
+
+fit3 <- eBayes(fit2)
+
+## output table with results of significance testing, fold-change
+de.severe <- topTable(fit3, number = Inf) %>%
+  mutate(peak_num = rownames(topTable(fit3, number = Inf)),
+         Comparison = "Severe")
+
+
+
+## Moderate
+cont.matrix.moderate <- makeContrasts(Moderate = factorshealthy-factorsmoderate,
+                                      levels = design)
+
+de.moderate <- contrasts.fit(fit, cont.matrix.moderate) %>%
+  eBayes() %>%
+  topTable(number = Inf) %>%  
+  rownames_to_column(var = "peak_num") %>%
+  mutate(Comparison = "Moderate")
+
+
+## Mild
+cont.matrix.mild <- makeContrasts(Mild = factorshealthy-factorsmild,
+                                  levels = design)
+
+de.mild <- contrasts.fit(fit, cont.matrix.mild) %>%
+  eBayes() %>%
+  topTable(number = Inf) %>%  
+  rownames_to_column(var = "peak_num") %>%
+  mutate(Comparison = "Mild")
+
+
+
+``` 
+
+<p>&nbsp;</p>
+
+<p>&nbsp;</p>
+
+
+#### Differential expression analysis (Supplementary Figure)
+
+``` {R FigureS3d_Volcano, fig.width = 14, fig.height = 4}
+
+df.volc <- rbind(de.severe,
+                 de.moderate,
+                 de.mild) %>%
+  mutate(col = ifelse(-log10(adj.P.Val) > -log10(0.05) & logFC > 1,
+                      yes = "red",
+                      no = ifelse(-log10(adj.P.Val) > -log10(0.05) & logFC < -1,
+                                  yes = "blue", 
+                                  no = ifelse(-log10(adj.P.Val) > -log10(0.05),
+                                              yes = "black",
+                                              no = "black"))))
+         
+
+ggplot(df.volc,
+       aes(x = logFC,
+           y = -log10(adj.P.Val),
+           colour = col,
+           alpha = 0.5)) + 
+  geom_point() + 
+  theme_linedraw() + 
+  theme(strip.background = element_blank(),
+        strip.text = element_text(colour = "black", face = "bold", size = 12, hjust = -0.01),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.spacing = unit(3, "lines"),
+        legend.position = "none") + 
+  scale_x_continuous(limits = c(-3.5,4)) + 
+  xlab("log2(COVID/Healthy)") +
+  ylab("-log10(p.adj)") +
+  geom_hline(yintercept = -log10(0.05), 
+             linetype = "dashed",
+             alpha = 0.5) + 
+  geom_vline(xintercept = -1, 
+             linetype = "dashed",
+             alpha = 0.5)+ 
+  geom_vline(xintercept = 1, 
+             linetype = "dashed",
+             alpha = 0.5) + 
+  scale_alpha_identity() + 
+  scale_colour_identity() +
+  facet_wrap(~paste(Comparison, "COVID-19 vs. Healthy"))
+
+
+paste0(df.volc %>%
+        filter(Comparison == "Severe",
+               abs(logFC) > 1, 
+               adj.P.Val < 0.05) %>%
+        nrow(),
+      " differentially expressed features (Severe/Healthy) - |logFC| > 1, p.adj < 0.05")
+
+de.features <- df.volc %>%
+        filter(Comparison == "Severe",
+               abs(logFC) > 1, 
+               adj.P.Val < 0.05) %>%
+  pull(peak_num)
+
+##write_csv(df.volc, "SourceData/EDFigure3d.csv")
+##ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/EDFigure3d.pdf", height = 4, width = 14)
+
+```
+
+<p>&nbsp;</p>
+
+<p>&nbsp;</p>
+
+
+
+#### Principal Component Analysis of COVID-19 Glycoproteomes
+
+``` {r Figure3d_PCA, fig.height = 3, fig.width = 5} 
+
+### PCA matrix
+matrix <- oxoscan.quant %>%
+  dplyr::select(File.Name, peak_num, 
+                I.WHO, F.Severity, 
+                Intensity.Norm) %>%
+  distinct() %>%
+  pivot_wider(values_from = Intensity.Norm, 
+              names_from = peak_num) %>%
+  mutate(F.Severity = factor(F.Severity, 
+                            levels = c("Healthy", "Mild", "Moderate", "Severe")))
+
+#scale and center
+matrix.filter <- matrix[,4:ncol(matrix)] %>%
+  scale(center = T, scale = T) ## scale + center
+
+rownames(matrix.filter) <- matrix$File.Name
+
+## calculate pcs
+pcadata <- prcomp(matrix.filter)
+
+pcadatadf <- as.data.frame(pcadata$x) 
+
+##plot pca
+ggplot(pcadatadf, aes(x= PC1, y = PC2)) + 
+  labs(x = paste("PC1, variance explained: ", format((pcadata$sdev^2/sum(pcadata$sdev^2))[1], digits = 2)),
+       y = paste("PC2, variance explained: ", format((pcadata$sdev^2/sum(pcadata$sdev^2))[2], digits = 2)),
+       colour = "Severity") +
+  geom_point(aes(colour = factor(matrix$F.Severity, levels = c("Healthy", "Mild", "Moderate", "Severe"))),
+             size = 2.5,
+             alpha = 0.95) + 
+  theme_linedraw() +
+  stat_ellipse(aes(group = matrix$F.Severity, colour = matrix$F.Severity), level = 0.9, alpha = 0.4, size = 1) + ## 90% level
+  scale_colour_manual(values = met.brewer("Egypt",4)[c(2:4,1)]) + 
+  theme(strip.background = element_blank(),
+        strip.text = element_text(colour = "black", face = "bold", size = 10),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.title.align = 0.8,
+        strip.text.x = element_text(hjust = -0.01),
+        legend.position = c(0.88, 0.25),
+        legend.key = element_blank(),
+        legend.background = element_rect(colour = NA, fill = NA, size = 0.1)) 
+
+
+##write_csv(as.data.frame(matrix), "SourceData/Figure3e_Figure3f.csv")
+##ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/Figure3e.pdf", height = 3, width = 5)
+
+```
+
+
+<p>&nbsp;</p>
+
+
+<p>&nbsp;</p>
+
+#### Hierarchical Clustering by Glycoproteome
+
+
+``` {r Figure3f_HierarchicalClustering, fig.width = 7.5, fig.height = 6}
+
+## vector of differentially expressed features
+de.genes <- de.severe %>%
+  filter(adj.P.Val < 0.05) %>%
+  rownames()
+
+
+## use differentially expressed features (n ~ 200)
+t.matrix <- t(matrix.filter)[intersect(de.genes, colnames(matrix.filter)),]
+
+who <- HeatmapAnnotation(Severity = as.factor(matrix$F.Severity),
+                        col=list(Severity = c("Severe" = met.brewer("Egypt", 4)[1], 
+                                              "Moderate" = met.brewer("Egypt", 4)[4],
+                                              "Mild" = met.brewer("Egypt", 4)[3],
+                                              "Healthy" = met.brewer("Egypt", 4)[2])),
+                        annotation_legend_param = list(ncol = 1,
+                                                       direction = "vertical"))
+
+
+### perform clustering
+matrix.dist <- dist(t(t.matrix)) ## cluster samples not features
+
+matrix.clust <- hclust(matrix.dist)
+
+## define dendrogram order for plotting
+column_dend <- as.dendrogram(matrix.clust) %>%
+  rotate(order=c(1:3)) 
+
+#pdf("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/Figure3f.pdf", height = 6, width = 7.5)
+
+
+Heatmap(t.matrix,
+        cluster_columns = column_dend,
+        name = "z-score",
+        col = colorRamp2(colors = c("red", "light yellow", "blue"), 
+                         breaks = c(4,0,-4)
+                         ), 
+        show_row_name = F,
+        show_column_names = F,
+        top_annotation = who,
+        show_column_dend = T,
+        show_row_dend = F,
+        cluster_rows = T,
+        row_dend_reorder = T,
+        column_dend_reorder = F,
+        heatmap_legend_param = list(ncol = 1,
+                                    direction = "vertical"))
+
+
+#while (!is.null(dev.list()))  dev.off()
+
+```
+
+
+``` {R Import byonic output}
+
+## Import combined outputs from Byonic for HCD-triggered ETD DDA data
+byonic <- dir_ls(paste0(raw.data.dir, "Byonic/"), regexp = "ByonicOutput") %>%
+  fread()
+
+```
+
+
+<p>&nbsp;</p>
+
+
+<p>&nbsp;</p>
+
+#### Matching DDA-identified glycopeptides to OxoScan-quantified features
+
+``` {R DIA / DDA precursor matching, message = F, echo = F, fig.height = 4, fig.width = 4}
+
+## Manually checked DIA features with accurate (TOF) masses
+dia.precursors <- dir_ls(paste0(raw.data.dir, "DIA"), regexp = "20220530_DIA_Features.csv") %>%
+  fread() %>%
+  select(-V1)
+
+# Get list of features to match to DDA data
+peaks <- unique(dia.precursors$peak_num)[is.na(unique(dia.precursors$peak_num)) == F]
+
+
+## Peak matching to DDA data
+dda.hits <- data.frame()
+
+for(i in seq_along(peaks)){
+  
+  temp1 <- dda.peak.extract(peaks[i]) %>%
+    mutate(peak_num = peaks[i]) %>%
+    left_join(dia.precursors) %>% 
+    mutate(Genes = ifelse(test = str_detect(`Protein Name`, "TRFE") == TRUE,
+                          yes = "TF", ### transferrin labelled as contaminant by Byonic
+                          no = Genes))
+                   
+ dda.hits <- rbind(dda.hits, temp1) 
+    
+ #print(i)
+ 
+}
+
+true.pos <- dda.hits %>%
+  distinct() %>% 
+  filter(!Genes %in% c("CP", "IGHA2", 
+                       "C4B", "APOC3")) %>% ### Manually checked misidentified glycopeptides
+  group_by(peak_num, Genes) %>%
+  mutate(nPSM = n()) %>%
+  ungroup() %>%
+  distinct() %>%
+  mutate(Genes = ifelse(StartPosition == 127,
+                        yes = "IGHA1;IGHA2",
+                        no = Genes)) %>%
+  group_by(Peptide, Genes, StartPosition, Glycan.Short, nPSM) %>%
+  filter(Score == max(Score)) %>%
+  ungroup() %>%
+  mutate(AA.Stripped = gsub(Peptide,
+                         pattern = "\\[\\+57.021\\]*", ### remove Cys alkylatioon
+                         replacement = ""),
+         AA.Only = sub(AA.Stripped, ## remove end two amino acids
+                         pattern = "[A-Z]\\.(.*)\\..*",
+                         replacement = "\\1"),
+         AA.Only = sub(AA.Only, ## remove glycan
+                         pattern = "\\[\\+.*\\]",
+                         replacement = ""),
+         AA.PreGlycan = sub(AA.Stripped,
+                         pattern = "[A-Z]\\.(.*)[NS]\\[\\+.*\\..*",
+                         replacement = "\\1"),
+         aa.number = nchar(AA.PreGlycan),
+         Position = as.character(StartPosition + aa.number),
+         AA = ifelse(str_detect(AA.Stripped,
+                                "(.*)[N]\\[") == T,
+                     yes = "N",
+                     no = "S")) 
+  
+
+
+```
+
+
+
+``` {r Candidate Biomarkers}
+
+### Theil-Sen trend test (WHO grade vs. glycopeptide intensity)
+
+# Test across all quantified features
+de.gp <- unique(oxoscan.quant$peak_num)
+
+trend.test.df <- data.frame(peak_num = de.gp)
+
+# Trend test for each feature individually
+for(i in 1:length(de.gp)){
+  peak <- de.gp[i]
+  temp <- filter(oxoscan.quant, peak_num == de.gp[i])
+  test <- kendallTrendTest(temp$Intensity.Norm ~ temp$I.WHO)
+  trend.test.df[i,2] <-  test$p.value
+  trend.test.df[i,3] <-  as.data.frame(test$estimate)[2,1]
+}
+
+# Multiple testing correction (FDR / Benjamini-Hochberg)
+trend.test.adj <- mutate(trend.test.df, 
+                     p.adj.gp = p.adjust(V2, 
+                                         method = "BH", 
+                                         n = length(trend.test.df$V2)))
+
+# Take P < 0.05, |log2FC| > 0.5 as candidates
+candidates.by.fc.p <- trend.test.adj %>%
+  left_join(select(de.severe, peak_num, logFC) %>%
+              mutate(peak_num = as.numeric(peak_num))) %>%
+  mutate(absfc = abs(logFC)) %>%
+  filter(p.adj.gp < 0.05,
+         absfc > 0.5,
+         peak_num %in% true.pos$peak_num) %>%
+  pull(peak_num)
+
+candidate.features <- trend.test.adj %>%
+  left_join(select(de.severe, peak_num, logFC) %>%
+              mutate(peak_num = as.numeric(peak_num))) %>%
+  mutate(absfc = abs(logFC)) %>%
+  filter(peak_num %in% c(candidates.by.fc.p, ## Differentially abundant features ID'd
+                         c(203,8,11,20,499,172,5,73))) %>% ## Re-analysed glycopeptides from glycoproteins of interest (based on other features)
+  left_join(true.pos, by = "peak_num") %>%
+  arrange(Genes, Glycan.Short) ## add fold-changes from limma
+
+candidates <- candidate.features %>%
+  pull(peak_num)
+
+
+```
+
+
+
+``` {R loop through and plot all directories, fig.width = 12, fig.height = 12}
+
+## Use plotting functions from Glyco_Functions.R 
+
+to.plot <- data.frame(Folder = dir_ls(paste0(raw.data.dir, "Validation")) %>%
+                        sub(pattern = ".*\\/(\\d*_.*)",
+                            replacement = "\\1"),
+                      Peak = dir_ls(paste0(raw.data.dir, "Validation")) %>%
+                        sub(pattern = ".*\\/(\\d*)_.*",
+                            replacement = "\\1"),
+                      Protein = dir_ls(paste0(raw.data.dir, "Validation")) %>%
+                        sub(pattern = ".*\\/\\d*_(.*)",
+                            replacement = "\\1")) %>%
+  mutate(across(everything(), as.character)) %>%
+  arrange(Protein)#%>%
+  #filter(Peak %in% candidates)
+
+
+```
+
+
+<p>&nbsp;</p>
+
+<p>&nbsp;</p>
+
+#### Identifying glycopeptide precursors with MS1/Q1 overlay spectra, back-to-back CID/HCD spectra comparison and OxoScan quantification for each feature
+
+
+``` {R Figure4_Validation, fig.width = 20, fig.height = 12.5}
+
+
+
+### Import raw data for XIC extraction - PlasmaPooled_5
+xic.raw <- dir_ls(paste0(raw.data.dir, "Kuebler"),
+                    regexp = "PlasmaPooled_2") %>%
+  fread() %>%
+  mutate(mz = (Window.Low + Window.High)/2, 
+         .before = 1,
+         Intensity = `138.055` + `186.076` + `204.087` + `274.092` + `292.103` + `366.14` + `657.235`) %>%
+  select(mz, RT, Intensity) %>%
+  distinct()
+ 
+
+
+
+### Need extra MS1 spectrum for peak_nnum 4
+
+## Selected features to plot for in Figure - rest in Supp
+fig3.plots <- c(11, ## FGB
+                1, ## HP
+                73 ## IGHA1,
+                )
+
+## Loop through and store as list components
+for(i in seq_along(fig3.plots)){
+  
+  if(i == 1){
+    fig3.plot.list <- list() ## Empty list
+  }
+  
+  ## put all 3 next
+  if(i == 2){
+    fig3.plot.list[[i]] <- plot_grid(plot.q1.ms1(peak = fig3.plots[i], Inset.x = 0.2),
+                                plot.b2b.fromfolder(fig3.plots[i], Max.PPM.Error = 20, label_text_size = 2),
+                                plot.xic.2d(peak = fig3.plots[i]),
+                                rel_widths = c(1,1,0.5),
+                                ncol = 3)
+    
+  }else{
+    fig3.plot.list[[i]] <- plot_grid(plot.q1.ms1(peak = fig3.plots[i]),
+                                plot.b2b.fromfolder(fig3.plots[i], Max.PPM.Error = 20, label_text_size = 2),
+                                plot.xic.2d(peak = fig3.plots[i]),
+                                rel_widths = c(1,1,0.5),
+                                ncol = 3)
+    
+  }
+  
+}
+
+
+
+plot.save <- plot_grid(fig3.plot.list[[2]],
+                       fig3.plot.list[[1]],
+                       fig3.plot.list[[3]],
+                       ncol=1)
+
+
+##ggsave(plot = plot.save, filename = "~/Desktop/20230522_Figure4_B2B_Test.png", height=12, width = 20)
+
+## Testing font sizes
+#plot.b2b.fromfolder(fig3.plots[i], Max.PPM.Error = 20, label_text_size = 3, intensity_threshold_for_labelling = 0.05)
+
+#ggsave(plot = plot.save, "/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/Figure4.pdf", height = 12, width = 20)
+
+```
+
+<p>&nbsp;</p>
+
+
+<p>&nbsp;</p>
+
+#### RT comparison of matched glycopeptides between microflow (DIA) and nanoflow (DDA) platforms (Supp. Figure X)
+
+``` {R FigureS2, fig.height = 4, fig.width = 5}
+## get sd of RT for each true.pos peak
+dda.dia.rt <- oxoscan.quant %>%
+  filter(peak_num %in% true.pos$peak_num) %>%
+  select(peak_num, merged_rt) %>%
+  distinct() %>%
+  left_join(true.pos %>% select(`Scan Time`, peak_num))
+
+##write_csv(dda.dia.rt %>%
+     #       rename(DIA_RT = "merged_rt",
+    #               DDA_RT = "Scan Time"), "SourceData/FigureS3c.csv")
+  
+
+dda.dia.rt %>%
+  ggplot(aes(x = `Scan Time`,
+             y = merged_rt)) + 
+  geom_point(size = 1.75, alpha = 0.5) +
+  xlim(25,110) +
+  ylim(6,24) + 
+  theme_linedraw() +
+  theme(panel.grid = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_text(colour = "black", face = "bold", size = 12, hjust = -0.01)) +
+  ylab("Microflow RT") +
+  xlab("Nanoflow RT") 
+
+#ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/EDFigure3c.pdf", height = 4, width = 5)
+
+
+```
+
+
+
+``` {R filter hits from DIA and get one table altogether}
+
+## filter out wrong hits from DDA data and get assignment info in one table for plotting
+dda.valid <- oxoscan.quant %>%
+  filter(peak_num %in% true.pos$peak_num) %>%
+  left_join(true.pos, by = "peak_num")
+
+
+
+## Import protein-level data (from Messner et al. 2020, Cell Systems)
+# Protein metadata
+prot.meta <- dir_ls("~/Desktop", regexp = "info.*cohort") %>%
+  fread() %>%
+  mutate(injno = sub(Data.File, 
+                       pattern = "^(\\d\\d\\d).*",
+                       replacement = "\\1"))
+
+
+prot.df <- dir_ls(paste0(raw.data.dir, "Kuebler"), regexp = "quant.*cohort") %>%
+  fread() %>%
+  pivot_longer(cols=2:133, names_to = "Data.File", values_to="Intensity") %>% 
+  left_join(prot.meta) %>%
+  filter(type != "plasmacontrol") %>%
+  dplyr::rename(File.Name = "ID") %>%
+  mutate(F.Severity = ifelse(type=="healthy",
+                           yes="healthy",
+                           no=severity),
+         File.Name = sub(File.Name, 
+                  pattern = "20-03-",
+                  replacement = ""),
+         Key = paste(File.Name, Replicate, sep = "_"),
+         File.Name = sub(File.Name,
+                  pattern = "(HD-.*)[[:upper:]]",
+                  replacement = "\\1"),
+         File.Name = sub(File.Name,
+                  pattern = "(CV-.*)[[:upper:]]",
+                  replacement = "\\1")) %>%
+  mutate(Inj.Nr = as.numeric(sub(Data.File, 
+                     pattern = "^0*(\\d*).*",
+                     replacement = "\\1"))) %>%
+  group_by(File.Name, Genes) %>%
+  summarise(Protein.Intensity = mean(Intensity)) %>%
+  filter(!is.na(Protein.Intensity))
+  
+
+
+```
+
+``` {R Master data.frame with protein and glycopeptide abundances by patient}
+
+
+### for each patient, need a table with each glyco feature, severity and protein intensity 
+
+
+## First just glyco features
+glyco.level <- oxoscan.quant %>%
+  mutate(Intensity = Intensity / median(Intensity, na.rm = T)) %>% ## scale to median Intensity
+  filter(peak_num %in% true.pos$peak_num) %>% ## show only identified glycopeptides 
+  dplyr::rename(Glycopeptide.Intensity = "Intensity") %>%
+  left_join(true.pos, by = "peak_num") %>%
+  mutate(keep = paste(peak_num, Genes, sep = "_")) %>%
+  select(peak_num, File.Name, Glycopeptide.Intensity, I.WHO, F.Severity, Peptide, Genes, Glycan.Short, 
+        AA.Only,
+         Position, AA) %>%
+  distinct()
+
+## Take prot level for each gene, sample
+prot.level <- prot.df %>%
+  mutate(Protein.Intensity = Protein.Intensity/median(Protein.Intensity, na.rm = T)) %>% ## scale to median Intensity
+  filter(Genes %in% unique(true.pos$Genes)) %>% ## Keep only protein-abundances for respectively identified glycopeptides
+  select(Genes, File.Name, Protein.Intensity) %>%
+  left_join(true.pos) %>%
+  select(-StartPosition, -peak_num, -Glycan.Short) %>%
+  distinct()
+
+
+## Bring together 
+protein.normalised <- left_join(glyco.level, prot.level) %>%
+  distinct() %>%
+  filter(! is.na(Protein.Intensity)) %>% ## Keep only patients/donors overlapping between both cohorts for comparative plots
+  mutate(GP.Normalised = Glycopeptide.Intensity / Protein.Intensity)
+
+
+
+```
+
+
+
+#``` {R FigureS2_AHSG+HPX, fig.height = 4, fig.width = 18}
+#
+#plot_grid(protein.boxplot("AHSG"),
+#          gp.boxplot(98, end.plot = T, end.facet.name = "AHSG"),
+#          gp.boxplot(66),
+#         protein.boxplot("HPX"),
+#          gp.boxplot(19, end.plot = T, end.facet.name = "HPX"),
+#          ncol = 5,
+#          rel_widths = c(1, 1, 1.1, 1, 1.1))
+#
+#```
+
+<p>&nbsp;</p>
+
+
+<p>&nbsp;</p>
+
+#### Dynamic range of quantified features in COVID-19 cohort (Figure 3d)
+
+``` {R Figure3d_DynamicRange, fig.height = 3, fig.width = 5}
+
+dyn <- oxoscan.normalised %>%
+  filter(File.Name == "PlasmaPooled") %>%
+  group_by(peak_num) %>%
+  mutate(Median.Intensity = median(Normalised.Intensity)) %>%
+  select(peak_num, Median.Intensity) %>%
+  distinct() %>%
+  ungroup()
+
+dyn.plot <- dyn %>%
+  arrange(desc(Median.Intensity)) %>%
+  mutate(peak_rank = 1:nrow(dyn)) 
+
+###write_csv(dyn.plot, "SourceData/Figure3d.csv")
+
+
+### chosen peaks across dynamic range to label
+label.peaks <- c(292, 172, 142, 66, 13, 3, 8, 1)
+
+#label.peaks <- intersect(label.peaks, validated.hits$peak_num)
+
+
+dyn.label <- validated.hits %>%
+  left_join(select(dyn.plot, peak_num, peak_rank, Median.Intensity)) %>%
+  filter(peak_num %in% label.peaks) 
+  
+  
+ggplot(dyn.plot, 
+       aes(x = peak_rank,
+           y = log10(Median.Intensity))) + 
+  geom_point(alpha = 0.5,
+             size = 1) + 
+  geom_point(data = filter(dyn.plot, peak_num %in% label.peaks),
+             inherit.aes = T,
+             colour = pnw_palette("Sunset2",5)[5],
+             size = 1.5, alpha = 1) +
+  geom_text_repel(data = dyn.label,
+             inherit.aes = F,
+             aes(label = paste(Genes,
+                               ", ",
+                               AA,
+                               Position,
+                               sep=""),
+                 x = peak_rank,
+                 y = log10(Median.Intensity)),
+             nudge_x = 300,
+             nudge_y = 0.1,
+             label.padding = 0.5,
+             max.overlaps = 20,
+             force_pull = 1,
+             force = 2,
+             #segment.size  = 0.2,
+             min.segment.length = 0.5,
+             segment.linetype = "dotted",
+             segment.color = "grey50",
+             direction     = "y",
+             size = 3,
+             fontface = "bold") +
+  scale_y_continuous(expand = expansion(mult = c(0.0, 0.05))) +
+  theme_linedraw() + 
+  xlab("Glycopeptide Feature Rank") + 
+  ylab("log10(Intensity)") + 
+  theme(panel.grid = element_blank())
+
+##ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/Figure3d.pdf", height = 3, width = 5)
+
+```
+
+
+<p>&nbsp;</p>
+
+<p>&nbsp;</p>
+
+
+# Revisions
+
+# Read in PRM data, parse into glycopeptides, adjacent peptides and unmodified peptides
+
+``` {R Read in metadata from OxoScan and PRM cohorts}
+
+
+## OxoScan meta
+meta <- dir_ls("Data/Kuebler", regexp = "Metadata") %>%
+  fread() %>%
+  clean_names()
+
+
+## PRM 
+prm.plate.layout <- dir_ls("Data", 
+                           regexp = "2210_PlateLayout") %>%
+  fread() %>%
+  mutate(Well = paste0(`row`, `col`),
+         f_severity = ifelse(Type=="healthy",
+                             yes="healthy",
+                             no=Type),
+         File.Name = sub(ID, 
+                         pattern = "20-03-",
+                         replacement = ""),
+         File.Name = sub(File.Name,
+                         pattern = "(HD-.*)[[:upper:]]",
+                         replacement = "\\1"),
+         File.Name = sub(File.Name,
+                         pattern = "(CV-.*)[[:upper:]]",
+                         replacement = "\\1")) %>%
+  select(File.Name, Well) %>%
+  rename(patient_id = "File.Name") %>%
+  left_join(meta) %>%
+  clean_names()
+
+
+
+```
+
+
+``` {R Glycopeptide table}
+
+## SEE: PRM_Methods script for loop to make all.transitions
+theoretical.gp.frags <- dir_ls("Data", regexp = "Ions") %>%
+  fread() %>%
+  filter(iontype != "immonium",
+         !str_detect(name, "imm")) %>%
+  clean_names() %>%
+  mutate(precursor_mz = round(precursor_mz, 3),
+         fragment_mz = round(fragment_mz, 3)) %>%
+  select(precursor_mz, fragment_mz, name, peak_num) %>%
+  distinct() 
+
+### Use all fragments for now
+gp.prm.raw <- dir_ls("Data", regexp = "OxoScan_Rev_it03_Quant_MRM_221210_glycoOnly") %>%
+  fread(dec = ",") 
+
+
+### Extract glycopeptide data
+gp.prm <- gp.prm.raw %>%
+  clean_names() %>%
+  mutate(well = sub(replicate_name, 
+                    pattern = ".*OxoScanRev_P01_(..)",
+                    replacement = "\\1"),
+         well = ifelse(well == "G8_r",
+                       yes="G8",
+                       no=well),
+         inj_nr = as.numeric(sub(replicate_name, 
+                      pattern = "(\\d\\d)_.*", 
+                      replacement = "\\1")),
+         precursor_mz = round(precursor_mz, 3),
+         fragment_mz = round(product_mz, 3)) %>%
+  left_join(prm.plate.layout) %>% ## Add patient info to each row
+  left_join(theoretical.gp.frags) %>%
+  filter(area > 0,
+         !is.na(peak_num), 
+         abs(mass_error_ppm) < 20,
+         !str_detect(patient_id, "Plasma"),
+         !str_detect(well, "QC")) %>%
+  filter(!is.na(name)) %>%
+  rename(fragment_charge = "product_charge") %>%
+  select(well, patient_id, i_who, f_severity, peak_num, precursor_mz, precursor_charge, fragment_mz, fragment_charge, name, area, total_area_fragment, total_background_fragment) %>% 
+  distinct()
+
+
+## Fragments for quantification
+specific.fragments <- gp.prm %>%
+  group_by(peak_num, precursor_mz, fragment_mz, name) %>%
+  summarise(n = n(),
+            Mean.Area = mean(area),
+            Min.Area = min(area),
+            Max.Area = max(area),
+            .groups = "drop") %>% 
+  filter(n > 43,
+         str_detect(name, "M") | str_detect(name, "Pep\\+N") | str_detect(name, "~y") | str_detect(name, "~b")
+         ) %>%
+  add_count(peak_num, name = "N.Specific.Fragments") %>% 
+  group_by(peak_num, precursor_mz) %>% 
+  slice_max(order_by = Mean.Area, n = 5) %>%
+  ungroup() %>%
+  mutate(precursor_fragment = paste0(precursor_mz, "_", fragment_mz)) %>%
+  pull(precursor_fragment)
+
+
+### Precursors to take from unmod/adjacent data
+gp.prm.formatted <- gp.prm %>%
+  mutate(precursor_fragment = paste0(precursor_mz, "_", fragment_mz)) %>%
+  filter(precursor_fragment %in% specific.fragments) %>% 
+  group_by(patient_id, i_who, f_severity, peak_num) %>%
+  summarise(prm_intensity = sum(area),
+            .groups = "drop") %>%
+  left_join(true.pos %>%
+              select(peak_num, Genes) %>%
+              rename(genes="Genes")) 
+  
+```
+
+
+``` {R Unmod peptide table}
+
+
+### Peptide info
+prm.nonglyco.sequences <- dir_ls("Data", regexp = "20221202_PRM_NonGlycosylated_PeptideList") %>% 
+  fread() %>%
+  clean_names() 
+
+prm.unmod.list <- prm.nonglyco.sequences %>%
+  filter(str_detect(peptide_type, "nmodified")) %>% 
+  pull(molecule) %>%
+  unique()
+
+prm.adjacent.list <- prm.nonglyco.sequences %>%
+  filter(str_detect(peptide_type, "djacent")) %>% 
+  pull(molecule) %>%
+  unique()
+
+### Read in peptide PRM data
+prm.pep.raw <- dir_ls("Data", regexp = "OxoScan_Rev_it03CLEANED_Quant_MRM_221209") %>%
+  fread(dec = ",") 
+
+
+## Reformat/filter
+prm.unmod <- prm.pep.raw %>%
+  clean_names() %>%
+  filter(molecule %in% prm.unmod.list) %>%
+  rename(stripped_sequence = "molecule",
+         fragment_name = "fragment_ion",
+         fragment_mz = "product_mz") %>%
+    mutate(well = sub(replicate_name, 
+                    pattern = ".*OxoScanRev_P01_(..)",
+                    replacement = "\\1"),
+         inj_nr = as.numeric(sub(replicate_name, 
+                      pattern = "(\\d\\d)_.*", 
+                      replacement = "\\1")),
+         precursor_mz = round(precursor_mz, 3),
+         fragment_mz = round(fragment_mz, 3),
+         precursor_id = paste0(stripped_sequence, precursor_charge),
+         precursor_id_fragment = paste0(precursor_id, "_", fragment_mz)) %>% 
+  left_join(prm.plate.layout) %>%
+  filter(area > 0,
+         abs(mass_error_ppm) < 20,
+         !str_detect(patient_id, "Plasma"),
+         !str_detect(well, "QC"))
+
+
+prm.unmod.pick.ions <- prm.unmod %>%
+  filter(!str_detect(fragment_name, "recursor"),
+         area != 0,
+         mass_error_ppm < 20,
+         !is.na(f_severity)) %>%
+  group_by(precursor_id, stripped_sequence, fragment_mz, fragment_name) %>%
+  summarise(n = n(),
+            Mean.Area = mean(area),
+            .groups = "drop") %>% 
+  filter(n > 43) %>%
+  add_count(precursor_id, name = "N.Specific.Fragments") %>% 
+  group_by(precursor_id) %>% 
+  slice_max(order_by = Mean.Area, 
+            n = 5) %>%
+  ungroup() %>%
+  mutate(precursor_id_fragment = paste0(precursor_id, "_", fragment_mz)) %>% 
+  pull(precursor_id_fragment)
+  
+### Quantify based on top 5 ions and aggregate multiple charge states of peptides  
+prm.unmod.formatted <- prm.unmod %>%
+  filter(area > 0,
+         !is.na(area),
+         !is.na(f_severity),
+         abs(mass_error_ppm) < 20,
+         precursor_id_fragment %in% prm.unmod.pick.ions) %>%
+  group_by(patient_id, f_severity, i_who, stripped_sequence) %>%
+  summarise(Peptide.Intensity = sum(area),
+            .groups="drop") %>%
+  distinct()
+   
+
+```
+
+
+``` {R Adjacent peptide table}
+
+
+## Reformat/filter
+prm.adjacent <- prm.pep.raw %>%
+  clean_names() %>%
+  filter(molecule %in% prm.adjacent.list) %>%
+  rename(stripped_sequence = "molecule",
+         fragment_name = "fragment_ion",
+         fragment_mz = "product_mz") %>%
+    mutate(well = sub(replicate_name, 
+                    pattern = ".*OxoScanRev_P01_(..)",
+                    replacement = "\\1"),
+         inj_nr = as.numeric(sub(replicate_name, 
+                      pattern = "(\\d\\d)_.*", 
+                      replacement = "\\1")),
+         precursor_mz = round(precursor_mz, 3),
+         fragment_mz = round(fragment_mz, 3),
+         precursor_id = paste0(stripped_sequence, precursor_charge),
+         precursor_id_fragment = paste0(precursor_id, "_", fragment_mz)) %>% 
+  left_join(prm.plate.layout) %>%
+  filter(area > 0,
+         abs(mass_error_ppm) < 20,
+         !str_detect(patient_id, "Plasma"),
+         !str_detect(well, "QC"))
+
+
+prm.adjacent.pick.ions <- prm.adjacent %>%
+  filter(!str_detect(fragment_name, "recursor"),
+         area != 0,
+         mass_error_ppm < 20,
+         !is.na(f_severity)) %>%
+  group_by(precursor_id, stripped_sequence, fragment_mz, fragment_name) %>%
+  summarise(n = n(),
+            Mean.Area = mean(area),
+            .groups = "drop") %>% 
+  filter(n > 43) %>%
+  add_count(precursor_id, name = "N.Specific.Fragments") %>% 
+  group_by(precursor_id) %>% 
+  slice_max(order_by = Mean.Area, 
+            n = 5) %>%
+  ungroup() %>%
+  mutate(precursor_id_fragment = paste0(precursor_id, "_", fragment_mz)) %>% 
+  pull(precursor_id_fragment)
+  
+### Quantify based on top 5 ions and aggregate multiple charge states of peptides  
+prm.adjacent.formatted <- prm.adjacent %>%
+  filter(area > 0,
+         !is.na(area),
+         !is.na(f_severity),
+         abs(mass_error_ppm) < 20,
+         precursor_id_fragment %in% prm.adjacent.pick.ions) %>%
+  group_by(patient_id, f_severity, i_who, stripped_sequence,) %>%
+  summarise(Peptide.Intensity = sum(area),
+            .groups="drop") %>%
+  distinct()
+
+
+```
+
+
+# OxoScan vs. PRM correlation plots
+
+
+``` {R Read in OxoScan data to compare}
+
+oxoscan.to.compare <- dir_ls("Data", regexp = "QuantTable") %>%
+  fread() %>%
+  clean_names() %>%
+  rename(oxoscan_intensity_norm = "intensity_norm",
+         oxoscan_intensity_raw = "intensity",
+         patient_id = "file_name") %>%
+  select(-merged_rt)
+
+
+
+```
+
+
+``` {R Plot correlation between OxoScan and PRM}
+
+## Calculate
+prm.oxoscan.compare <- gp.prm.formatted %>%
+  left_join(oxoscan.to.compare) %>% 
+  distinct() %>%
+  left_join(true.pos %>%
+              select(peak_num, Genes)) %>%
+  group_by(peak_num) %>%
+  mutate(prm_normalised = prm_intensity / median(prm_intensity),
+         oxoscan_normalised = oxoscan_intensity_raw / median(oxoscan_intensity_raw)) %>%
+  filter(!is.na(oxoscan_normalised),
+         !is.na(prm_normalised)) %>%
+  ungroup() 
+
+
+### Spearman correlateion
+peak_correlations <- prm.oxoscan.compare %>%
+  group_by(peak_num) %>%
+  summarise(correlation = cor(prm_normalised, 
+                              oxoscan_normalised,
+                              method = "spearman"))
+
+
+validated.prm.vector <- peak_correlations %>%
+  filter(correlation > 0.7) %>%
+  pull(peak_num)
+
+
+```
+
+``` {R FigureS4_MatchedSpectra, fig.height = 30, fig.width = 18}
+
+validated.hits <- true.pos %>%
+  filter(peak_num %in% intersect(validated.prm.vector,
+                                validated.dda.vector),
+         peak_num != 203)
+
+supp.s4.peaks <- validated.hits$peak_num
+  
+  
+## Loop through and store as list components
+for(i in seq_along(supp.s4.peaks)){
+  
+  if(i==1){
+    fig.s4.plot.list <- list() ## Empty list
+  }
+  
+  temp.gene <- true.pos %>%
+    filter(peak_num == supp.s4.peaks[i]) %>%
+    pull(Genes)
+  
+  print(paste(supp.s4.peaks[i], "started"))
+  
+  ## put all 3 next
+  fig.s4.plot.list[[i]] <- plot_grid(plot.b2b.fromfolder(supp.s4.peaks[i],
+                                                         Max.PPM.Error = 20, label_text_size = 3))
+  
+  print(paste(supp.s4.peaks[i], "done"))
+  
+}
+
+## Put into single dataframe for Source Data
+
+#combined.s4.tables.hcd <- data.frame() 
+
+#for(i in seq_along(dir_ls("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/Figure3-5/SourceData/FigureS4", regexp="HCD"))){
+
+#  temp.tab.name <- dir_ls("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/Figure3-5/SourceData/FigureS4", regexp="HCD")[i] %>%
+#  as.character() %>%
+#  sub(pattern = "/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/Figure3-5/SourceData/FigureS4/(.*).csv", replacement = "\\1")
+  
+#  temp.csv <- dir_ls("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/Figure3-5/SourceData/FigureS4", regexp="HCD")[i] %>%
+#    fread() %>%
+#    mutate(peaknum_protein_fragmentation = temp.tab.name)
+  
+#  combined.s4.tables.hcd <- rbind(combined.s4.tables.hcd,
+#                                  temp.csv)
+
+  # Remove temp variables
+#  rm(temp.tab.name)
+#  rm(temp.csv)
+  
+#}
+
+
+
+## Plot all together
+##ggsave(,
+#       filename = "~/Desktop/20230522_SuppPlot_AllB2B.png", 
+#       height = 24, width = 16)
+
+#ggsave(plot = do.call("grid.arrange", c(fig.s4.plot.list, ncol=2)),
+#       "/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/EDFigure4.pdf", height = 24, width = 16)
+
+
+```
+
+# Comparison of Byonic + MSFragger identifications
+
+``` {R Read in MSFragger+Byonic data}
+
+
+### Check Byonic  vs. MSFragger ###
+byonic.glyco.spectra <- dir_ls("Data/Byonic", regexp = "ByonicOutput") %>%
+  fread() %>%
+  mutate(Spectrum.Id = sub(`Scan #`, pattern = ".*scan=(\\d*)", 
+                           replacement = "\\1"),
+         Sample_Spectrum = paste0(Pool, "_", Spectrum.Id)) 
+
+
+### MSFragger (semi-specific to account for IGHA1)
+msfragger.semispec <- dir_ls("Data/MSFragger_Glyco/HCD_semispecific", regexp = "psm") %>%
+  fread() %>% 
+  filter(!is.na(`Glycan q-value`),
+         `Glycan q-value` < 0.01) %>% 
+  mutate(Scan = sub(Spectrum,
+                    pattern = ".*ETDtrig_01.(\\d*)\\..*",
+                    replacement = "\\1"),
+         Pool = sub(Spectrum,
+                    pattern = ".*Ralser_Matt_(.*)_ETDtrig_.*",
+                    replacement = "\\1"),
+         Sample_Spectrum = paste0(Pool, "_", Scan),
+         AA.Stripped = gsub(Peptide,
+                            pattern = "\\[\\+57.021\\]*", ### remove Cys alkylatioon
+                            replacement = ""),
+         AA.Only = sub(AA.Stripped, ## remove end two amino acids
+                       pattern = "[A-Z]\\.(.*)\\..*",
+                       replacement = "\\1"),
+         AA.Only = sub(AA.Only, ## remove glycan
+                       pattern = "\\[\\+.*\\]",
+                       replacement = "")) %>%
+  filter(!is.na(`Glycan Score`)) %>%
+  mutate(Glycan.MSFragger = sub(`Observed Modifications`, pattern = " \\% .*",
+                                replacement = "")) %>%
+  select(Sample_Spectrum, Peptide, AA.Only, `Observed M/Z`, Glycan.MSFragger)
+
+
+msfragger.ethcd <- dir_ls("Data/MSFragger_Glyco/EThcD_specific", regexp = "psm") %>%
+  fread() %>%
+  filter(!is.na(`Glycan q-value`),
+         `Glycan q-value` < 0.01) %>% 
+  mutate(Scan = sub(`Spectrum`, 
+                           pattern = ".*ETDtrig_01\\.(\\d*)\\..*", 
+                           replacement = "\\1"),
+         Pool = sub(Spectrum, pattern = ".*Ralser_Matt_(.*)_ETDtrig.*",
+                    replacement = "\\1"),
+         Sample_Spectrum = paste0(Pool, "_", Scan),
+         AA.Stripped = gsub(Peptide,
+                             pattern = "\\[\\+57.021\\]*", ### remove Cys alkylatioon
+                             replacement = ""),
+          AA.Only = sub(AA.Stripped, ## remove end two amino acids
+                        pattern = "[A-Z]\\.(.*)\\..*",
+                        replacement = "\\1"),
+          AA.Only = sub(AA.Only, ## remove glycan
+                        pattern = "\\[\\+.*\\]",
+                        replacement = "")) %>%
+  filter(!is.na(`Glycan Score`)) %>%
+  mutate(Glycan.MSFragger = sub(`Observed Modifications`, pattern = " \\% .*",
+                                replacement = "")) %>%
+  select(Sample_Spectrum, Peptide, AA.Only, `Observed M/Z`, Glycan.MSFragger)
+
+
+msfragger.hcd <- dir_ls("Data/MSFragger_Glyco/HCD_specific", regexp = "psm") %>%
+  fread() %>%
+  filter(!is.na(`Glycan q-value`),
+         `Glycan q-value` < 0.01) %>% 
+  mutate(Scan = sub(`Spectrum`, 
+                           pattern = ".*ETDtrig_01\\.(\\d*)\\..*", 
+                           replacement = "\\1"),
+         Pool = sub(Spectrum, pattern = ".*Ralser_Matt_(.*)_ETDtrig.*",
+                    replacement = "\\1"),
+         Sample_Spectrum = paste0(Pool, "_", Scan),
+         AA.Stripped = gsub(Peptide,
+                             pattern = "\\[\\+57.021\\]*", ### remove Cys alkylatioon
+                             replacement = ""),
+          AA.Only = sub(AA.Stripped, ## remove end two amino acids
+                        pattern = "[A-Z]\\.(.*)\\..*",
+                        replacement = "\\1"),
+          AA.Only = sub(AA.Only, ## remove glycan
+                        pattern = "\\[\\+.*\\]",
+                        replacement = "")) %>%
+  filter(!is.na(`Glycan Score`)) %>%
+  mutate(Glycan.MSFragger = sub(`Observed Modifications`, pattern = " \\% .*",
+                                replacement = "")) %>%
+  select(Sample_Spectrum, Peptide, AA.Only, `Observed M/Z`, Glycan.MSFragger)
+
+## O-glycan
+msfragger.oglycan <- dir_ls("Data/MSFragger_Glyco", regexp = "O-glycan_psm") %>%
+  fread() %>%
+  filter(!is.na(`Observed Modifications`),
+         str_detect(`Observed Modifications`, "Hex"),
+         `Observed Modifications` != "",
+         !str_detect(Peptide, "N.[ST]")) %>% 
+  mutate(Scan = sub(`Spectrum`, 
+                           pattern = ".*ETDtrig_01\\.(\\d*)\\..*", 
+                           replacement = "\\1"),
+         Pool = sub(Spectrum, pattern = ".*Ralser_Matt_(.*)_ETDtrig.*",
+                    replacement = "\\1"),
+         Sample_Spectrum = paste0(Pool, "_", Scan),
+         AA.Stripped = gsub(Peptide,
+                             pattern = "\\[\\+57.021\\]*", ### remove Cys alkylatioon
+                             replacement = ""),
+          AA.Only = sub(AA.Stripped, ## remove end two amino acids
+                        pattern = "[A-Z]\\.(.*)\\..*",
+                        replacement = "\\1"),
+          AA.Only = sub(AA.Only, ## remove glycan
+                        pattern = "\\[\\+.*\\]",
+                        replacement = "")) 
+
+
+
+  
+oglycan.codes <- data.frame(`Observed Modifications` = unique(msfragger.oglycan$`Observed Modifications`),
+                            Glycan.MSFragger = c("HexNAc(1)Hex(1)NeuAc(1)",
+                                                 "HexNAc(4)Hex(5)NeuAc(1)",
+                                                 "HexNAc(1)Hex(1)",
+                                                 "HexNAc(1)Hex(1)Fuc(1)NeuAc(1)",
+                                                 "HexNAc(3)Hex(2)Fuc(1)",
+                                                 "HexNAc(2)Hex(1)Fuc(1)")) %>%
+  rename(`Observed Modifications` = "Observed.Modifications") 
+
+msfragger.oglycan <- msfragger.oglycan %>%
+  left_join(oglycan.codes) %>%
+  select(Sample_Spectrum, Peptide, AA.Only, `Observed M/Z`, Glycan.MSFragger)
+
+msfragger.search <- rbind(
+  msfragger.semispec %>%
+    filter(str_detect(Peptide, "LAGKPTHVNVSVVMAEVDGTC")),
+  msfragger.hcd %>%
+    filter(!str_detect(Peptide, "LAGKPTHVNVSVVMAEVDGTC")),
+  msfragger.oglycan)
+
+
+
+### Combine search outputs by scan number and keep only those with the same assignment (Peptide + Glycan)
+combined.search <- left_join(byonic.glyco.spectra, msfragger.search,
+                             by = "Sample_Spectrum") %>%
+  filter(!is.na(Peptide.y),
+         AA.Only == Peptide.y,
+         Glycan == Glycan.MSFragger
+         ) %>%
+  select(Sample_Spectrum, `Observed m/z`, `M+H`, `Observed M/Z`, Peptide.x, AA.Only, Peptide.y, Glycan, Glycan.MSFragger) %>%
+  left_join(true.pos %>%
+              rename(Peptide.x = "Peptide") %>%
+              select(Peptide.x, peak_num))
+
+
+```
+
+
+# Filtered only features with good agreement between PRM and OxoScan
+
+``` {R Combine assignment and quantification filtering}
+
+validated.dda.vector <- unique(combined.search$peak_num[combined.search$peak_num != 203]) 
+
+### Doubly validated by stringest filtering for assignment quality + quantification
+validated.glycopeptides <- intersect(validated.dda.vector,
+                                     validated.prm.vector)
+
+```
+
+
+``` {R Plot OxoScan vs PRM for validated glycopeptides, fig.height = 3, fig.width = 3}
+
+# Compute Pearson correlation for each group
+prm.oxoscan.compare %>%
+  filter(!is.na(prm_normalised),
+         !is.na(oxoscan_normalised),
+         peak_num %in% validated.glycopeptides
+         ) %>% 
+  summarise(correlation = cor(prm_normalised, 
+                              oxoscan_normalised, 
+                              method = "spearman")) %>% 
+  pull(correlation)
+
+##write_csv(prm.oxoscan.compare, "SourceData/Figure5c.csv")
+
+prm.oxoscan.compare %>%
+  ggplot(aes(x = log10(prm_normalised),
+             y = log10(oxoscan_normalised)#,
+             #colour = as.factor(f_severity)
+             #colour = as.factor(peak_num)
+            )) + 
+  geom_point(alpha=0.15,
+             size=1) +
+  geom_abline(slope=1,intercept=0,
+              alpha=0.5,linetype="dashed") +
+  #facet_wrap(~paste0(peak_num, ", Corr = ", round(correlation,4))) #+
+  xlim(-2,2) + 
+  ylim(-2,2) + 
+  xlab("log10(HR-MRM Intensity)") +
+  ylab("log10(OxoScan intensity)") +
+  annotate("text",
+           x = -1, y = 1, 
+           parse = T,
+           label = expression(rho~"= 0.86"),
+           colour = "black", 
+           size = 5,
+           fontface = "bold") +  
+  theme_linedraw() + 
+  theme(panel.grid = element_blank())
+  
+##ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/Figure5c.pdf", height = 3, width = 3)
+
+```
+
+
+``` {R Oxonium vs specific ions, fig.height = 3, fig.width = 3}
+
+##### Oxonium vs specific ion
+## Fragments for quantification
+oxonium.fragments <- c(138.055, 186.076, 204.087, 274.092, 292.103, 366.139, 657.235)
+
+gp.compare.quant <- gp.prm %>%
+  mutate(precursor_fragment = paste0(precursor_mz, "_", fragment_mz)) %>%
+  filter(precursor_fragment %in% specific.fragments | fragment_mz %in% oxonium.fragments,
+         peak_num %in% validated.glycopeptides) %>% 
+  mutate(IonType = ifelse(fragment_mz %in% oxonium.fragments,
+                          yes="Oxonium",
+                          no="Specific")) %>%
+  group_by(patient_id, i_who, f_severity, peak_num, IonType) %>%
+  summarise(prm_intensity = sum(area),
+            .groups = "drop") %>%
+  pivot_wider(names_from = "IonType",
+              values_from = "prm_intensity") %>%
+  distinct() %>%
+  filter(!is.na(Oxonium),
+         !is.na(Specific)) %>%
+  left_join(true.pos %>%
+              select(peak_num, Genes))
+
+ion_correlations <- gp.compare.quant %>%
+  filter(!is.na(Oxonium),
+         !is.na(Specific),
+         peak_num %in% validated.glycopeptides) %>%
+  group_by(peak_num) %>%
+  mutate(Oxonium = Oxonium / median(Oxonium),
+         Specific = Specific / median(Specific)) %>%
+  ungroup() %>%
+  summarise(correlation = cor(Oxonium, 
+                              Specific, 
+                              method = "spearman"))
+
+##write_csv(gp.compare.quant, "SourceData/Figure5d.csv")
+
+gp.compare.quant %>%
+  group_by(peak_num) %>%
+  mutate(Oxonium = Oxonium / median(Oxonium),
+         Specific = Specific / median(Specific)) %>%
+  ungroup() %>%
+  ggplot(aes(x = log10(Specific),
+             y = log10(Oxonium))) + 
+  geom_point(alpha=0.15,
+             size=1) +
+  geom_abline(slope=1,intercept=0,
+              alpha=0.5,linetype="dashed") +
+  #facet_wrap(~peak_num) +
+  xlim(-2,2) + 
+  ylim(-2,2) + 
+  ylab("log10(Oxonium ion intensity)") +
+  xlab("log10(Specific ion intensity)") +
+  #geom_text(aes(x=))
+  annotate("text",
+           x = -1, y = 1, 
+           parse = T,
+           label = expression(rho~"= 0.99"),
+           colour = "black", 
+           size = 5,
+           fontface = "bold") +  
+  theme_linedraw() + 
+  theme(panel.grid = element_blank())
+
+
+  
+##ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/Figure5d.pdf", height = 3, width = 3)
+
+
+```
+
+
+# Ratios of glycopeptide:adjacent peptides (aggregated per protein)
+
+``` {R Combine unmod and adjacent and make ratios to glycopeptides}
+
+prm.all.peptides <- rbind(prm.adjacent.formatted %>%
+                                mutate(Peptide.Type = "Adjacent"),
+                          prm.unmod.formatted %>%
+                                mutate(Peptide.Type = "Unmod")) %>%
+  left_join(prm.nonglyco.sequences %>%
+              select(genes, molecule) %>%
+              rename(stripped_sequence = "molecule"))
+
+prm.gp.pep.ratio <- prm.all.peptides %>%
+  left_join(gp.prm.formatted, by = c("patient_id", "i_who", "f_severity", "genes")) %>%
+  filter(!is.na(peak_num),
+         !is.na(prm_intensity),
+         !is.na(Peptide.Intensity),
+         peak_num %in% validated.glycopeptides) %>%
+  distinct() %>%
+  mutate(Ratio.GP.Peptide = prm_intensity / Peptide.Intensity)
+
+
+##write_csv(prm.gp.pep.ratio, "SourceData/Figure5e_EDFigure6.csv")
+
+
+```
+
+``` {R Figure S6a: All gp:adj pep ratios}
+
+### Plot boxplots for all validated glycopeptides with adjacent peptide measurement
+
+
+for(i in unique(prm.gp.pep.ratio$peak_num)){
+  
+  plot.save.gene <- true.pos %>%
+    filter(peak_num == i) %>%
+    pull(Genes)
+  
+  plot.save.glycan <- true.pos %>%
+    filter(peak_num == i) %>%
+    pull(Glycan.Short)
+    
+  plot.save.aa <- true.pos %>%
+    filter(peak_num == i) %>%
+    pull(AA)
+
+  plot.save.position <- true.pos %>%
+    filter(peak_num == i) %>%
+    pull(Position)  
+
+  ### Ratios
+  plot.save <- prm.gp.pep.ratio %>%
+    filter(peak_num == i,
+           Peptide.Type == "Adjacent") %>% 
+    group_by(Peptide.Type, patient_id, genes, f_severity, peak_num) %>%
+    summarise(Mean.Ratio = mean(Ratio.GP.Peptide), .groups = "drop") %>%
+    group_by(Peptide.Type) %>%
+    mutate(Mean.Ratio.Norm = Mean.Ratio / median(Mean.Ratio)) %>%
+    ungroup() %>% 
+    left_join(true.pos) %>%
+    #left_join(trend.test.adj) %>% 
+    ggplot(aes(x = f_severity,
+               y = log2(Mean.Ratio.Norm),
+               fill = Peptide.Type)) + 
+    geom_boxplot() +
+    theme_linedraw() + 
+    theme(axis.title.x = element_blank(),
+          panel.grid = element_blank(),
+          legend.position = "none",
+          strip.background = element_rect(colour="white",
+                                          fill = "white"),
+          axis.text.x = element_text(angle=30, hjust=1, vjust=1),
+          strip.text = element_text(colour="black")) +
+    labs(fill = "Peptide Type") + 
+    #ylim(-1.5,1.5) + 
+    ylab("log2(Glycopeptide:Peptide)") +
+    facet_wrap(~paste0(genes, ", ", AA, Position, ", ", Glycan.Short),
+               #scales="free",
+               ncol = 6)
+
+  #ggsave(plot = plot.save,
+         paste0("Plots/20230522_GP-Peptide-Ratios_", 
+                plot.save.gene,"-", plot.save.aa, plot.save.position,
+                "-", plot.save.glycan, ".pdf"),
+         height = 2.5,
+         width = 2.25)
+
+}
+
+
+```
+
+``` {R Figure S6b: IGHA1;IGHA2 glycopeptides normalised to IGHA1, IGHA2, IGHA1;IGHA2 adjacent peptides}
+
+igha12.gp <- gp.prm.formatted %>%
+  filter(peak_num %in% c(40,130,28))  ## IGHA1;IGHA2 glycopeptides
+  
+igha12.pep <- prm.all.peptides %>%
+  filter(genes %in% c("IGHA2", "IGHA1")) %>%
+  mutate(genes = ifelse(stripped_sequence == "SAVQGPPER",
+                        yes="IGHA1;IGHA2",
+                        no=genes))
+
+igha12.combined <- igha12.pep %>%
+  left_join(igha12.gp, by = c("patient_id", "i_who", "f_severity")) %>%
+  mutate(GP.to.Pep.Ratio = prm_intensity / Peptide.Intensity) %>%
+  #left_join(true.pos) %>% ### Genes.x = protein group of adjacent peptide
+  filter(!is.na(peak_num)) %>% 
+  group_by(patient_id, f_severity, i_who, genes.x, peak_num, Peptide.Type) %>%
+  summarise(Mean.GP.Pep.Ratio = mean(GP.to.Pep.Ratio)) %>%
+  ungroup()
+
+
+igha12.combined %>%
+  group_by(genes.x, peak_num) %>%
+  left_join(true.pos) %>%
+  mutate(Mean.GP.Pep.Ratio = Mean.GP.Pep.Ratio/median(Mean.GP.Pep.Ratio)) %>%
+  ggplot(aes(x = f_severity,
+             y = log2(Mean.GP.Pep.Ratio),
+             fill=genes.x)) + 
+  geom_boxplot() + 
+  theme(axis.title.x = element_blank()) +
+  ylab("log2(Glycopeptide:Peptide)") +
+  facet_wrap(~as.factor(paste0("Glycopeptide:\n", Genes, ", N131/", AA, Position, ", ", Glycan.Short))) +
+  theme_linedraw() + 
+  theme(panel.grid = element_blank(),
+        strip.background = element_rect(fill="white",
+                                        colour="white"),
+        strip.text = element_text(colour="black",
+                                  hjust=0),
+        axis.title.x = element_blank()) + 
+  ylim(-2,2) + 
+  labs(fill = "Normalised to:")
+
+##ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/EDFigure6b.pdf", height = 3, width = 8)
+
+
+
+```
+
+``` {R Figure 5e: Glycopeptide:adjacent peptide ratios for Fig5a glycopeptides}
+
+
+fig.5e.df <- prm.gp.pep.ratio %>%
+  filter(peak_num %in% c(66, 12, 142, 3, 28),
+         Peptide.Type == "Adjacent") %>%
+  mutate(genes = ifelse(str_detect(genes, "IGH"),
+                        yes="IGHA1;IGHA2",
+                        no=genes)) %>%
+  group_by(patient_id, f_severity, i_who, genes, peak_num) %>%
+  summarise(Mean.GP.Pep.Ratio = mean(Ratio.GP.Peptide), .groups="drop")
+  
+
+
+adj.combined <- prm.gp.pep.ratio %>%
+  filter(Peptide.Type == "Adjacent") %>%
+  mutate(genes = ifelse(str_detect(genes, "IGH"),
+                        yes="IGHA1;IGHA2",
+                        no=genes)) %>%
+  group_by(patient_id, f_severity, i_who, genes, peak_num) %>%
+  summarise(Mean.GP.Pep.Ratio = mean(Ratio.GP.Peptide), .groups="drop") %>%
+  mutate(Mean.GP.Pep.Ratio = as.numeric(Mean.GP.Pep.Ratio),
+         i_who = as.numeric(i_who))
+
+
+### Trend test on aggregated ratio
+# Test across all quantified features
+adj.agg.trend <- unique(adj.combined$peak_num)
+
+adj.agg.trend.df <- data.frame(peak_num = adj.agg.trend)
+
+# Trend test for each feature individually
+for(i in 1:length(adj.agg.trend)){
+  
+  peak <- adj.agg.trend[i]
+  
+  temp <- adj.combined %>%
+    filter(peak_num == adj.agg.trend[i]) 
+    
+  test <- ?kendallTrendTest(data=temp,
+                           Mean.GP.Pep.Ratio ~ i_who)
+  
+  adj.agg.trend.df[i,2] <-  test$p.value
+  
+  adj.agg.trend.df[i,3] <-  as.data.frame(test$estimate)[2,1]
+}
+
+# Multiple testing correction (FDR / Benjamini-Hochberg)
+adj.agg.trend.adj <- mutate(adj.agg.trend.df, 
+                     p.adj.gp = p.adjust(V2, 
+                                         method = "BH", 
+                                         #n = length(adj.agg.trend.df$V2)#,
+                                         n = 17
+                                         ))
+
+fig.5e.df %>%
+  group_by(genes) %>%
+  mutate(GP.to.Pep.Ratio.Norm = Mean.GP.Pep.Ratio / median(Mean.GP.Pep.Ratio)) %>% 
+  left_join(adj.agg.trend.adj) %>% 
+  left_join(true.pos) %>%
+  filter(peak_num %in% c(66, 12, 142, 3, 28)) %>%
+  mutate(label = ifelse(genes %in% c("HP", "TF"),
+                        yes = paste0(genes,", ", AA, Position, ", ", Glycan.Short,
+                     "\np = ", format.pval(p.adj.gp, digits=1, eps = 0.001, nsmall = 2)),
+                     no = paste0(genes,", ", AA, Position, ", ", Glycan.Short,
+                     "\np ", format.pval(p.adj.gp, digits=1, eps = 0.001, nsmall = 2)))) %>%
+  ggplot(aes(x = f_severity,
+             y = log2(GP.to.Pep.Ratio.Norm),
+             fill = genes)) + 
+  geom_boxplot() + 
+  geom_point(alpha=0.5) + 
+  theme(axis.title.x = element_blank()) +
+  ylab("log2(Glycopeptide:Peptide Ratio)") +
+  facet_wrap(~label,
+             scales = "free",
+             ncol=5) + 
+  scale_fill_manual(values=pnw_palette("Sunset2",5)) +
+  theme_linedraw() + 
+  theme(strip.background = element_blank(),
+        strip.text.x = element_text(colour = "black", 
+                                  face = "bold",
+                                  size = 10.5,
+                                  hjust = 0),
+        strip.text.y = element_text(colour = "black", 
+                                    face = "bold",
+                                    size = 12),
+        axis.text.x = element_text(size = 9),
+        axis.title.x = element_blank(),
+        panel.grid.major = element_blank(),    
+        panel.border = element_rect(size = 1.5, 
+                                    colour = "light grey"),
+        panel.grid.minor = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0.1), "cm"),
+        legend.position = "none") 
+
+##ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/Figure5e.pdf", height = 2.5, width = 12)
+
+
+```
+
+
+# Plot and combine 5 good examples into Figure 5
+
+
+
+``` {R Figure S6c: Ratio of unmod:adjacent}
+
+adj.unmod.df <- prm.all.peptides %>%
+  filter(genes %in% c("HP", "AHSG", "TF"),
+         Peptide.Type == "Adjacent") %>%
+  rename(Adj.Intensity = "Peptide.Intensity") %>%
+  select(-Peptide.Type) %>%
+  distinct() %>%
+  left_join(prm.all.peptides %>%
+              ungroup() %>%
+              filter(genes %in% c("HP", "AHSG", "TF"),
+                     Peptide.Type == "Unmod") %>%
+              rename(Unmod.Intensity = "Peptide.Intensity") %>%
+              select(genes, patient_id, Unmod.Intensity) %>%
+              distinct()) %>% 
+  mutate(`Adjacent:Unmod` = Adj.Intensity / Unmod.Intensity) %>%
+  group_by(patient_id, f_severity, i_who, genes) %>%
+  summarise(Mean.Unmod.Adj.Ratio = mean(`Adjacent:Unmod`), .groups = "drop") %>%
+  group_by(genes) %>%
+  mutate(Mean.Unmod.Adj.Ratio = Mean.Unmod.Adj.Ratio / median(Mean.Unmod.Adj.Ratio)) %>% 
+  ungroup()
+
+# Trend test for each feature individually
+adj.unmod.trend.list <- adj.unmod.df$genes %>% unique()
+
+adj.unmod.trend.df <- data.frame(genes = adj.unmod.trend.list)
+
+# Trend test for each feature individually
+for(i in 1:length(adj.unmod.trend.list)){
+  
+  peak <- adj.unmod.trend.list[i]
+  
+  temp <- adj.unmod.df %>%
+    filter(genes == peak) 
+    
+  test <- kendallTrendTest(temp$Mean.Unmod.Adj.Ratio ~ temp$i_who)
+  
+  adj.unmod.trend.df[i,2] <-  test$p.value
+  
+  adj.unmod.trend.df[i,3] <-  as.data.frame(test$estimate)[2,1]
+}
+
+
+# Multiple testing correction (FDR / Benjamini-Hochberg)
+adj.unmod.trend.adj <- mutate(adj.unmod.trend.df, 
+                     p.adj.gp = p.adjust(V2, 
+                                         method = "BH", 
+                                         n = length(adj.unmod.trend.df$V2))) 
+
+### Plot
+adj.unmod.df %>%
+  left_join(adj.unmod.trend.adj) %>% ## Find common and add p value to facet
+  ggplot(aes(x=f_severity,
+             y=log2(Mean.Unmod.Adj.Ratio),
+             fill=genes)) + 
+  geom_boxplot() + 
+  ylab("log2(Adjacent:Unmodified)") + 
+  facet_wrap(~paste0("Adjacent:unmodified\npeptide ratio\n",
+                     genes, ", p = ",
+                     format.pval(p.adj.gp, digits=1, eps = 0.00000001, nsmall = 2))) +
+  theme_linedraw() + 
+  theme(panel.grid = element_blank(),
+    axis.title.x = element_blank(),
+    legend.position = "none",
+    strip.background = element_rect(fill="white",
+                                    colour="white"),
+    strip.text = element_text(colour="black", hjust=0, size = 12)) +
+  scale_fill_manual(values=pnw_palette("Starfish", 6)[c(1,3,5)])
+
+##ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/EDFigure6c.pdf", height = 3, width = 8)
+
+
+```
+
+
+``` {R Figure 5a/Figure S5: OxoScan boxplots}
+
+
+oxoscan.trend <- validated.glycopeptides
+
+oxoscan.trend.df <- data.frame(peak_num = oxoscan.trend)
+
+
+# Trend test for each feature individually
+for(i in 1:length(oxoscan.trend)){
+  
+  peak <- oxoscan.trend[i]
+  
+  temp <- oxoscan.to.compare %>%
+    ungroup() %>%
+    mutate(oxoscan_intensity_norm = oxoscan_intensity_norm / median(oxoscan_intensity_norm)) %>% ## Scale values around 1
+    filter(peak_num == peak) 
+    
+  test <- kendallTrendTest(temp$oxoscan_intensity_norm ~ temp$i_who)
+  
+  oxoscan.trend.df[i,2] <-  test$p.value
+  
+  oxoscan.trend.df[i,3] <-  as.data.frame(test$estimate)[2,1]
+}
+
+# Multiple testing correction (FDR / Benjamini-Hochberg)
+oxoscan.trend.df <- mutate(oxoscan.trend.df, 
+                     p.adj.gp = p.adjust(V2, 
+                                         method = "BH", 
+                                         n = length(oxoscan.trend.df$V2)))
+
+
+
+### Plot OxoScan quantities for validated glycopeptides
+oxoscan.to.compare %>%
+  filter(peak_num %in% c(66,3,28,142,12)) %>%
+  ungroup() %>%
+  mutate(oxoscan_intensity_norm = oxoscan_intensity_norm / median(oxoscan_intensity_norm)) %>% ## Scale values around 1
+  filter(!is.na(peak_num)) %>%
+  left_join(oxoscan.trend.df) %>%
+  left_join(true.pos %>%
+              select(Genes, peak_num, AA, Position, Glycan.Short)) %>% 
+  mutate(label = ifelse(Genes %in% c("HP", "TF"),
+                        yes = paste0(Genes,", ", AA, Position, ", ", Glycan.Short,
+                     "\np = ", format.pval(p.adj.gp, digits=1, eps = 0.001, nsmall = 2)),
+                     no = paste0(Genes,", ", AA, Position, ", ", Glycan.Short,
+                     "\np ", format.pval(p.adj.gp, digits=2, eps = 0.001, nsmall = 3)))) %>% 
+  ggplot(aes(x = factor(f_severity, levels=c("Healthy","Mild","Moderate", "Severe")),
+             y = log2(oxoscan_intensity_norm), ### Glycopeptide feature intensity
+             fill = Genes)) + 
+  geom_boxplot(inherit.aes = T, 
+               alpha=0.75) + 
+  geom_point(alpha=0.5) +
+  theme_linedraw() +
+  theme(strip.background = element_blank(),
+        strip.text.x = element_text(colour = "black", 
+                                  face = "bold",
+                                  size = 10.5,
+                                  hjust = 0),
+        strip.text.y = element_text(colour = "black", 
+                                    face = "bold",
+                                    size = 12),
+        axis.text.x = element_text(size = 9),
+        axis.title.x = element_blank(),
+        panel.grid.major = element_blank(),    
+        panel.border = element_rect(size = 1.5, 
+                                    colour = "light grey"),
+        panel.grid.minor = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0.1), "cm"),
+        legend.position = "none") +
+  scale_y_continuous(labels = label_number(accuracy = 0.1)) + 
+  ylab("log2(OxoScan Intensity)") +
+  scale_colour_manual(values = pnw_palette("Sunset",5)) + 
+  scale_fill_manual(values = pnw_palette("Sunset",5)) +
+  facet_wrap(~label,
+                     scales = "free_y", 
+                     ncol = 5)
+
+##ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/Figure5a.pdf", height = 2.5, width = 12)
+
+
+```
+
+
+``` {R Figure ED5 - all glycopeptides from OxoScan}
+
+
+### Plot OxoScan quantities for validated glycopeptides
+oxoscan.to.compare %>%
+  ungroup() %>%
+  mutate(oxoscan_intensity_norm = oxoscan_intensity_norm / median(oxoscan_intensity_norm)) %>% ## Scale values around 1
+  filter(!is.na(peak_num)) %>%
+  left_join(oxoscan.trend.df) %>%
+  left_join(true.pos %>%
+              select(Genes, peak_num, AA, Position, Glycan.Short)) %>% 
+  filter(peak_num %in% validated.glycopeptides) %>% 
+  ggplot(aes(x = factor(f_severity, levels=c("Healthy","Mild","Moderate", "Severe")),
+             y = log2(oxoscan_intensity_norm), ### Glycopeptide feature intensity
+             fill = Genes)) + 
+  geom_boxplot(inherit.aes = T, 
+               alpha=0.75) + 
+  geom_point(alpha=0.5) + 
+  theme_linedraw() +
+  theme(strip.background = element_blank(),
+        strip.text.x = element_text(colour = "black", 
+                                  face = "bold",
+                                  size = 10.5,
+                                  hjust = 0),
+        strip.text.y = element_text(colour = "black", 
+                                    face = "bold",
+                                    size = 12),
+        axis.text.x = element_text(size = 9),
+        axis.title.x = element_blank(),
+        panel.grid.major = element_blank(),    
+        panel.border = element_rect(size = 1.5, 
+                                    colour = "light grey"),
+        panel.grid.minor = element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0.1), "cm"),
+        legend.position = "none") +
+  scale_y_continuous(labels = label_number(accuracy = 0.1)) + 
+  ylab("log2(OxoScan Intensity)") +
+  scale_colour_manual(values = pnw_palette("Sunset",20)) + 
+  scale_fill_manual(values = pnw_palette("Sunset",20)) +
+  facet_wrap(~paste0(Genes, 
+                     ", ",
+                     AA, Position,
+                     ", ",
+                     Glycan.Short), 
+                     scales = "free_y", 
+                     ncol = 4)
+
+##ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/EDFigure5.pdf", height = 9, width = 10)
+
+
+```
+
+``` {R Fig 5b - B2B of Skyline PRM MS2 and OxoScan 2Da MS2, fig.height=4.25, fig.width=10}
+
+###### TF
+tf.b2b.msms <- rbind(dir_ls("Data/OxoScan_PRM_B2B", regexp = "TF_MS2") %>%
+                         fread(dec = ",") %>%
+                         mutate(Method="PRM",
+                                Intensity = as.numeric(Intensity)),
+                                      
+                       dir_ls("Data/OxoScan_PRM_B2B", 
+                              regexp = "TOF MS\\^") %>%
+                         fread() %>%
+                         select(1:2) %>%
+                         rename(`m/z` = 1,
+                                Intensity = 2) %>%
+                         mutate(Method="OxoScan",
+                                Intensity = as.numeric(Intensity))) %>%
+  group_by(Method) %>%
+  mutate(Rel.Intensity = 100 * Intensity / max(Intensity)) %>%
+  ungroup() %>%
+  difference_full_join(theoretical.gp.frags %>%
+                         filter(peak_num == 12) %>%
+                         rename(`m/z` = "fragment_mz"), max_dist = 0.01) %>%
+  mutate(Abs.Diff = abs(`m/z.x` - `m/z.y`),
+         PPM.Error = 1000000*Abs.Diff/`m/z.x`) %>%
+  group_by(`m/z.x`) %>%
+  filter(Abs.Diff == min(Abs.Diff) | is.na(`m/z.y`)) %>%
+  rename(`m/z` = "m/z.x") %>%
+  mutate(name = ifelse(PPM.Error > 20,
+                       yes=NA,
+                       no=name),
+         name = ifelse(str_detect(name, "C\\d*H\\d*N.*"),
+                                  yes=NA,
+                                  no=name))
+
+## Write CSV to Source Data
+#write_csv(tf.b2b.msms, 
+#          "SourceData/Figure5b.csv")
+  
+
+plot.save <- prm.oxoscan.b2b.msms("tf.b2b.msms",
+                     TopPlotLabel = "TF, N630, N4H5S2",
+                     SetWidth = 2,
+                     LabelXPos = 1900,
+                     LabelYPos = 150,
+                     LabelSize = 6,
+                     PeakAnnotationSize = 4,
+                     MinLabelIntensity = 1)
+
+plot.save
+
+##ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/Figure5b.pdf", height = 4.25, width = 10)
+
+
+```
+
+
+
+``` {R Re-plot oxonium ion maps for reviewer-requested ions, fig.height = 6, fig.width = 9}
+
+oxonium.map.raw <- dir_ls("Data/OxoniumIon_Overlay", regexp = "PlasmaPooled_1.wiff") %>%
+  fread() %>%
+  mutate(mz = (Window.Low + Window.High) / 2) %>%
+  select(mz, RT, 4:12) %>%
+  pivot_longer(cols = 3:11,
+               names_to = "Ion",
+               values_to = "Intensity") %>%
+  filter(!is.na(Intensity),
+         Intensity != 0) 
+
+## Ion labels
+ion.labels <- data.frame(Ion = c("186.08", "204.09", "274.09", "292.1",
+                               "407.165", "512.197", "803.293"),
+                       Name = c("N-H2O", "N", "S-H2O", "S",
+                                "NN", "NHF", "NHSF")) %>%
+  mutate(IonLabel = ifelse(Ion == "186.08",
+                           yes="Monosaccharide oxonium ions",
+                           no=ifelse(Ion == "407.165",
+                                     yes="Polysaccharide oxonium ions",
+                                     no="")))
+
+ion.label.order <- unique(paste0(ion.labels$IonLabel, "\nm/z = ",
+                     ion.labels$Ion, " (", ion.labels$Name, ")"))
+
+oxonium.map.raw %>%
+  filter(Ion != "292.1") %>%
+  group_by(Ion) %>%
+  mutate(Scaled = Intensity / max(Intensity)) %>%
+  ungroup() %>%
+  filter(Ion %in% ion.labels$Ion) %>% 
+  left_join(ion.labels) %>%
+  ggplot(aes(x=RT,
+             y=mz,
+             alpha=Scaled)) + 
+  geom_point(size=0.5) + 
+  scale_alpha_identity() +
+  facet_wrap(~factor(paste0(IonLabel, "\nm/z = ", Ion, " (", Name, ")"),
+                     levels = ion.label.order)) + 
+  ylim(810,1390) + 
+  xlim(5,25) +
+  ylab("Precursor m/z") + 
+  xlab("Retention Time / min") + 
+  theme_linedraw() + 
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 16),
+        strip.background = element_blank(),
+        strip.text = element_text(colour="black", hjust=0, size =14))
+
+
+##write_csv(oxonium.map.raw, "SourceData/FigureS2a.csv")
+
+##ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/EDFigure2a.pdf", height = 6, width = 9)
+
+```
+
+
+
+``` {R Find example overlay of each ion, fig.height = 4, fig.width = 6}
+
+## 407
+oxonium.ion.overlay.raw <- dir_ls("Data/OxoniumIon_Overlay", regexp = "407") %>%
+  fread() %>%
+  mutate(mz = (Window.High + Window.Low) / 2) %>%
+  select(-Window.High, -Window.Low) %>%
+  pivot_longer(cols = 2:7,
+               names_to = "ion",
+               values_to = "intensity") %>%
+  filter(intensity != 0) %>%
+  group_by(ion) %>%
+  mutate(Max.Intensity = max(intensity)) %>%
+  ungroup() %>%
+  mutate(Scaled = intensity/Max.Intensity)
+
+overlay.ion.labels <- data.frame(ion = sort(unique(oxonium.ion.overlay.raw$ion)),
+                                 name = c("N-H2O", "N", "S-H2O", "NH", "NN", "NHS")) %>%
+  mutate(label = paste0("m/z = ", ion, " (", name, ")"))
+
+overlay.ion.order <- overlay.ion.labels$label[c(1,2,4,5,3,6)]
+
+oxonium.ion.overlay.raw %>%
+  left_join(overlay.ion.labels) %>% 
+  filter(RT > 13,
+         RT < 17,
+         mz > 1150,
+         mz < 1250,
+         ) %>%
+  group_by(ion) %>%
+  mutate(Intensity = as.numeric(intensity),
+         Scaled = Intensity / max(Intensity)) %>%
+  ungroup() %>% 
+  ggplot(aes(x=RT,
+             y=mz,
+             alpha=0.5*Scaled)) + 
+  geom_point(size=1,
+             shape=15) + 
+  geom_point(aes(x=14.72,
+                 y=1213),
+             colour="red",
+             alpha=0.5,
+             size=1,
+             inherit.aes = F) + 
+  scale_alpha_identity() +
+  facet_wrap(~factor(label, levels = overlay.ion.order)) + 
+  ylab("Precursor m/z") + 
+  xlab("Retention Time / min") + 
+  theme_linedraw() + 
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 12),
+        strip.background = element_blank(),
+        strip.text = element_text(colour="black", hjust=0, size =10))
+
+##write_csv(oxonium.ion.overlay.raw, "SourceData/FigureS2b.csv")
+##ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/EDFigure2b.pdf", height = 4, width = 6)
+
+
+```
+

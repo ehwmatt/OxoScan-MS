@@ -1,0 +1,355 @@
+---
+title: "OxoScan - Figure 1"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Analysis of purified IgG glycopeptides by Scanning SWATH
+
+
+```{r setup, include=FALSE}
+
+
+
+knitr::opts_chunk$set(eval = T,
+                      echo = F,
+                      #include = F,
+                      error = F,
+                      warning = F,
+                      fig.path = paste0(getwd(),
+                                        "/Plots/",
+                                        gsub(Sys.Date(), ## Make folder for date of running
+                                             pattern = "-", 
+                                             replacement = ""),
+                                        "_Plots/"))
+
+## Packages
+library(data.table)
+library(fs)
+library(tidyverse)
+library(gridExtra)
+library(grid)
+library(magrittr)
+### colour palettes
+library(viridisLite)
+library(viridis)
+library(MetBrewer)
+
+## Packages
+root.dir <- getwd() ## Change as necessary to enclosing folder with script (from which /Data and /Plots are accessed)
+
+raw.data.dir <- paste0(root.dir, "/Data/")
+
+plot.output.dir <- paste0(root.dir, "/Plots/")
+
+```
+
+
+### Read in and re-format output from DIA-NN `--extract` function  
+
+
+
+#### Oxonium ion output (m/z = 138.06, 803.29, 366.14, 186.08, 657.24, 274.09, 204.09, 512.20, 292.10)  
+
+
+``` {R Read in IgG DIA-NN Output, echo = T, eval = T}
+
+# Read in, format to long table, remove zero values and calculate scaled intensities for each ion
+igg.raw <- dir_ls(raw.data.dir, regexp = "Oxonium") %>%
+  fread() %>%
+  pivot_longer(4:12, names_to = "Ion", values_to = "Intensity") %>%
+  mutate(mz = ((Window.Low+Window.High)/2)) %>% ## Use bin mid-point as binned m/z value
+  dplyr::select(-Window.Low, -Window.High) %>% ## Remove upper/lower bounds
+  mutate(Ion = as.numeric(Ion),
+         Ion = round(Ion, digits = 2)) %>% ## Round oxonium ions for ease of interpretation
+  filter(Intensity != 0) ## Remove zero values
+  
+# Sum intensities across all oxonium ions at each RT/mz bin
+igg.summed <- igg.raw %>%
+  group_by(RT, mz) %>% # For each x/y coordinate (RT-mz coordinate)
+  summarise(Summed.Intensity = sum(Intensity), .groups = "drop") %>% # Sum intensities for each ion
+  mutate(IgG.Subclass = ### Select each IgG subclass by RT window (based on manually assigned precursor masses and known RT behaviour)
+           ifelse(RT > 25.5 & RT < 30.5,
+                  yes="IgG1",
+                  no=ifelse(RT > 36 & RT < 41.5,
+                            yes="IgG4",
+                            no=ifelse(RT > 49 & RT < 54.5,
+                                      yes="IgG2",
+                                      no="Other"))),
+         Max.Intensity = max(Summed.Intensity)) %>%
+  group_by(IgG.Subclass) %>% 
+  mutate(Max.Subclass.Intensity = max(Summed.Intensity), ## Compute maximum intensity per subclass to scale each ion clearly
+         Max.Subclass.Intensity = ifelse(IgG.Subclass == "Other", ## For regions outside of each known subclass, scale to global maximum
+                                         yes = Max.Intensity,
+                                         no = Max.Subclass.Intensity),
+         Scaled.Intensity = Summed.Intensity/Max.Subclass.Intensity) %>% ## Intensities scaled by subclass
+    
+  filter(Scaled.Intensity != 0) %>%
+  ungroup() 
+
+## Export igg.summed for Source Data
+##write_csv(igg.summed, "SourceData/Figure_1f_S1a.csv")
+
+```
+
+
+### IgG Oxonium  Ion Map
+
+``` {R IgG_Oxonium_Scaled, fig.width = 6, fig.height = 2.5, echo = T, eval = T}
+
+## Plot glycopeptide map of IgG
+igg.ox.plot <- igg.summed %>%
+  ggplot(aes(x = RT, y = mz)) +
+  geom_point(aes(alpha = Scaled.Intensity),
+             size = 1, 
+             shape = 15) +
+  xlim(25,55) +
+  ylim(750,1200) +
+  theme_linedraw() + 
+  theme(strip.background = element_blank(),
+        strip.text = element_text(colour = "black", face = "bold"),
+        panel.grid = element_blank(),
+        axis.title.x = element_text(colour = "black"),    
+        axis.title.y = element_text(colour = "black"),
+        plot.margin = unit(c(0, 0, 0, 0), "cm"),        
+        panel.border = element_rect(fill=NA, colour = "black", size=0.8),
+        legend.position = "none") +
+  scale_alpha_identity() +
+  ylab("Precursor m/z") +
+  xlab("Retention Time / min") +
+  geom_rect(fill = NA,
+            size = 0.2,
+            colour = "grey",
+            alpha = 0.05,
+            xmin = 25.5,
+            xmax = 30.5,
+            ymin = 800, 
+            ymax = 1110) +
+  geom_rect(fill = NA,
+            size = 0.2,
+            colour = "grey",
+            alpha = 0.05,
+            xmin = 36,
+            xmax = 41.5,
+            ymin = 800, 
+            ymax = 1110) + 
+  geom_rect(fill = NA,
+            size = 0.2,
+            colour = "grey",
+            alpha = 0.05,
+            xmin = 49,
+            xmax = 54.5,
+            ymin = 800, 
+            ymax = 1110)
+
+igg.ox.plot
+
+##ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/Figure1f_MainPanel.pdf", height = 2.5, width = 6)
+
+```
+
+### Un-scaled IgG Plot
+
+``` {R IgG_Oxonium_Unscaled, fig.height = 2.5, fig.width = 6, eval = T, echo = F}
+
+## Plot glycopeptide map of IgG
+igg.unscaled.plot <- igg.summed %>%
+  ungroup() %>%
+  mutate(Part.Intensity = Summed.Intensity / max(Summed.Intensity)) %>%
+  ggplot(aes(x = RT, y = mz)) +
+  geom_point(aes(alpha = Part.Intensity),
+             size = 1, 
+             shape = 15) +
+  xlim(25,55) +
+  ylim(750,1200) +
+  theme_linedraw() + 
+  theme(strip.background = element_blank(),
+        strip.text = element_text(colour = "black", face = "bold"),
+        panel.grid = element_blank(),
+        axis.title.x = element_text(colour = "black"),    
+        axis.title.y = element_text(colour = "black"),
+        plot.margin = unit(c(0, 0, 0, 0), "cm"),        
+        panel.border = element_rect(fill=NA, colour = "black", size=0.8),
+        legend.position = "none") +
+  scale_alpha_identity() +
+  ylab("Precursor m/z") +
+  xlab("Retention Time / min")
+
+igg.unscaled.plot
+
+##ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/EDFigure1a.pdf", height = 2.5, width = 6)
+```
+
+ 
+ 
+#### Y1 ion output (m/z = 1392.59, 1360.59, 1376.59 + isotopologues for IgG1, IgG2, IgG4 respectively)  
+
+
+
+``` {R Plot Y1 maps of IgG1/2/4 subclasses, eval = T, warning = F, echo = T}
+
+### Read in, sum Y1 isotopologues, group by subclass and scale separately
+igg.y1 <- dir_ls(raw.data.dir, regexp = "Y1") %>%
+  fread() %>%
+  mutate(IgG1 = `1392.59`+`1393.59`+`1394.59`, ## Sum isotopic clusters for each subclass Y1 ion
+         IgG2 = `1360.59`+`1361.59`+`1362.59`,
+         IgG4 = `1376.59`+`1377.59`+`1378.59`+`1379.59`,
+         mz = ((Window.Low+Window.High)/2)) %>% ## Take center of bin for precursor m/z
+  dplyr::select(RT, mz, IgG1, IgG2, IgG4) %>%
+  pivot_longer(cols = 3:5,
+               values_to = "Intensity",
+               names_to = "IgG.Subclass") %>% ## Make 'long' table
+  mutate(IgG.Subclass = ## Divide into IgG subclasses by RT, as with oxonium plot ^
+           ifelse(RT > 25.5 & RT < 30.5,
+                  yes="IgG1",
+                  no=ifelse(RT > 36 & RT < 41.5,
+                            yes="IgG4",
+                            no=ifelse(RT > 49 & RT < 54.5,
+                                      yes="IgG2",
+                                      no="Other")))) %>%
+  filter(IgG.Subclass != "Other") %>% ## Show only regions of each subclass
+  group_by(IgG.Subclass) %>%
+  mutate(Scaled.Intensity = Intensity/max(Intensity)) %>% ## Scale intensity separately for each subclass
+  ungroup() %>%
+  filter(Scaled.Intensity != 0)
+
+##write_csv(igg.y1, "SourceData/Figure_1f_Insets.csv")
+
+
+``` 
+
+``` {R IgG_Y1, eval = T, echo = F, message = F, warning = F}
+
+
+## Function to plot each Y1 map by subclass
+plot.igg.subclass <- function(Plot.Subclass, set_colour){
+  
+  temp.igg.df <- igg.y1 %>%
+    filter(IgG.Subclass == Plot.Subclass)
+  
+  temp.igg.plot <- temp.igg.df %>%
+    ggplot(aes(x = RT, y = mz)) +
+    geom_point(aes(alpha = 1.5*Scaled.Intensity,
+               colour = IgG.Subclass),
+               size = 1, 
+               shape = 15) +
+    xlim(min(temp.igg.df$RT)-0.5,max(temp.igg.df$RT)+0.5) +
+    ylim(800,1100) +
+    theme_linedraw() + 
+    theme(strip.background = element_blank(),
+          strip.text = element_text(colour = "black", face = "bold"),
+          panel.grid = element_blank(),
+          axis.text.x = element_blank(),
+          axis.title.x = element_blank(),    
+          axis.text.y = element_blank(),
+          plot.margin = unit(c(0.1,0.1,0.1,0.1), "cm"),
+          panel.border = element_rect(fill=NA, colour = "black", size=0.8),
+          legend.position = "none") +
+      scale_alpha_identity() +
+    ylab("") +
+    xlab("") +
+    scale_colour_manual(values = set_colour)
+  
+  return(temp.igg.plot)
+  
+}
+
+
+## Output plot for each subclass
+loop.subclasses <- unique(igg.y1$IgG.Subclass) %>%
+  sort() ## Take only IgG subclasses (remove 'Other') and arrange for colours
+
+igg.subclass.plots <- list() ## Empty list to fill with plots
+
+colours_to_plot <- c("#6986C3",## 1
+                     "#DC287F", ## 2
+                     "#F9AE15") ## 4
+
+## Store and save each plot
+for(i in seq_along(loop.subclasses)){
+ 
+  igg.subclass.plots[[i]] <- plot.igg.subclass(loop.subclasses[i], set_colour = colours_to_plot[i])
+  
+}
+
+
+```
+
+
+ 
+### Subclass Y1 plots overlaid on initial oxonium ion map for the same sample  
+
+
+``` {R Figure_1f, fig.height = 4.5, fig.width = 8, eval = T, warning = F, message = F, echo = F, results = F}
+
+#pdf("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/Figure1f.pdf", height = 5, width = 6)
+
+figure.1f <- grid.arrange(
+  grobs = list(igg.subclass.plots[[1]],igg.subclass.plots[[3]],igg.subclass.plots[[2]], ## IgG1, IgG4, IgG2 respectively
+               igg.ox.plot), ## Oxonium Plot
+  widths = c(0.125, 1, 1, 1), ## Create slight indent to account for extra width of y-axis labels
+  heights = c(0.55, 1),
+  layout_matrix = rbind(c(NA, 1, 2, 3),
+                        c(4, 4, 4, 4)))
+
+#while (!is.null(dev.list()))  dev.off()
+
+
+
+```
+
+
+### Retention time shifts by glycan composition in reverse-phase separation  
+
+
+``` {R IgG_RT_Shifts, fig.width = 4, fig.height = 3, message = F, warning = F}
+
+### Import IgG peak table
+igg.peaks.raw <- dir_ls(raw.data.dir, regexp = "IgG_OxoScanOutput") %>%
+  fread() 
+
+### Comparison of RT shifts between different glycan structure
+igg.peaks <- igg.peaks.raw %>%
+  select(IgG, Glycan, peak_num, RT) %>%
+  mutate(G = sub(Glycan, pattern = "G(\\d).*", replacement = "\\1")) %>%
+  group_by(G, IgG, Glycan) %>%
+  summarise(RT = mean(RT),
+            .groups = "drop") %>% ## take mean of duplicates
+  group_by(IgG, G) %>%
+  mutate(Ref = min(RT), ## take minimum RT (GXF) for each subclass/X
+         RT.Shift = RT - Ref) %>% ## normalise RT to minimum
+  ungroup() %>%
+  mutate(Glycan.Addition = ifelse(str_detect(Glycan, "N"), ## Change in structure
+                                  yes = "+ Bisecting\nGlcNAc",
+                                  no = ifelse(str_detect(Glycan, "S"),
+                                              yes = "+ Sialic\nAcid",
+                                              no = ifelse(!str_detect(Glycan, "F"),
+                                                          yes = "- Core\nFucose",
+                                                          no = Glycan))), ## add annotations for change in glycan structure in each comparison
+         RT.Shift = ifelse(!str_detect(Glycan, "F"),
+                           yes = RT.Shift * -1, ## change polarity of core fucose (addition)
+                           no = RT.Shift)) %>%
+  filter(! Glycan %in% c("G2F","G1F","G0F")) ## remove reference glycans from plots
+
+igg.peaks %>% 
+  ggplot(aes(x = Glycan.Addition, 
+             y = RT.Shift,
+             colour = factor(IgG))) + 
+  geom_point() + 
+  labs(colour = "IgG Subclass") + 
+  theme_linedraw() + 
+  theme(panel.grid = element_blank()) + 
+  ylab("RT Shift") + 
+  #xlab("Glycan Change (Relative to GXF)") + 
+  xlab("") + 
+  geom_hline(yintercept = 0, linetype = "dashed") + 
+  scale_colour_manual(values=met.brewer("Egypt", 3))
+
+
+##write_csv(igg.peaks, "SourceData/Figure_S1b.csv")
+
+##ggsave("/Users/whitem/Documents/GitHub/OxoScan-MS/paper_analysis/FinalFigurePDFs/EDFigure1b.pdf", height = 3, width = 4.5)
+
+
+```
